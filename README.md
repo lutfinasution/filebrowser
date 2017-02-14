@@ -1,14 +1,14 @@
 # filebrowser
-Filebrowser + thumbnail viewer
-Expanded example based on lxn's excellent walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
+Filebrowser + thumbnail viewer.
+- Expanded example based on lxn's excellent walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
 features.
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser01.png?raw=true "screenshot")
 
 Why?
-I'm trying to explore golang's capabilities and performance in developing a multithreaded and memory intensive windows desktop app.
-For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007.
-So far golang didn't disappoint!
+  I'm trying to explore golang's capabilities and performance in developing a multithreaded and memory intensive windows desktop app.
+  For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007.
+  So far golang didn't disappoint!
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser02.png?raw=true "screenshot")
  - To download Antares12, go to https://dl.dropboxusercontent.com/u/15522093/antares121setup.zip
