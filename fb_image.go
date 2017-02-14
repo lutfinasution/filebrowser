@@ -51,7 +51,7 @@ func (t ThumbRect) thm() int {
 }
 
 var thumbR = ThumbRect{120, 75, 10, 10, 48}
-var done chan int
+var donechan chan int
 var donewait sync.WaitGroup
 
 var doCache = false
@@ -59,8 +59,8 @@ var doCache = false
 //var doCache = true
 
 func setImgcache(numJob int, dirpath string) bool {
-	if done != nil {
-		close(done)
+	if donechan != nil {
+		close(donechan)
 		donewait.Wait()
 	}
 	Mw.pgBar.SetValue(0)
@@ -74,6 +74,7 @@ func setImgcache(numJob int, dirpath string) bool {
 		itms = append(itms, filepath.Join(dirpath, tableModel.items[l].Name))
 	}
 
+	//determine the num of worker goroutines
 	grCount := runtime.NumCPU()
 	wtCount := grCount
 	c := int(numJob / grCount)
@@ -83,7 +84,7 @@ func setImgcache(numJob int, dirpath string) bool {
 	}
 
 	donewait.Add(wtCount)
-	done = make(chan int, 1)
+	donechan = make(chan int, 1)
 	workCounter = 0
 
 	go func() {
@@ -107,7 +108,7 @@ func setImgcache(numJob int, dirpath string) bool {
 				iStop = numJob
 			}
 
-			go doRendering(done, itms, iStart, iStop)
+			go doRendering(donechan, itms, iStart, iStop)
 
 			k = k + c
 		}
