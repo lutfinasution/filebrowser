@@ -5,8 +5,8 @@ features.
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser01.png?raw=true "screenshot")
 
 # Why?
-  I'm trying to explore golang's capabilities and performance in developing a multithreaded and memory intensive windows desktop app...
-  For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007...
+  I'm trying to explore golang's capabilities and performance in developing a multithreaded and memory intensive windows desktop app.
+  For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007.
   So far golang didn't disappoint!
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser02.png?raw=true "screenshot")
