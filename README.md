@@ -5,6 +5,11 @@ features.
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser01.png?raw=true "screenshot")
 
+Why?
+Trying to see golang capabilities and performance in developing windows desktop app. 
+For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007.
+![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser02.png?raw=true "screenshot")
+
 Features:
   - Image browser, displaying thumbnail of images in a grid.
   - Image http server, serving thumbnail of images in a folder. Use http://localhost:8080/users/photos while the app is running.
