@@ -11,7 +11,7 @@ For inspiration and comparison, I used my old application, Antares12 which was b
 So far golang didn't disappoint!
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser02.png?raw=true "screenshot")
-To download Antares12, go to https://dl.dropboxusercontent.com/u/15522093/antares121setup.zip
+ - To download Antares12, go to https://dl.dropboxusercontent.com/u/15522093/antares121setup.zip
 
 Features:
   - Image browser, displaying thumbnail of images in a grid.
