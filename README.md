@@ -1,5 +1,5 @@
-# Filebrowser + thumbnail viewer + http server.
-- Expanded example based on lxn's excellent walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
+# Filebrowser + thumbnail viewer + http server...
+Expanded example based on lxn's excellent walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
 features.
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser01.png?raw=true "screenshot")
