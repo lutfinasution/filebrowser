@@ -1,6 +1,8 @@
 # filebrowser
 Filebrowser + thumbnail viewer
 
+![Alt text](/blob/master/image/filebrowser01.png?raw=true "screenshot")
+
 Expanded example based on lxn walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
 features. 
 
