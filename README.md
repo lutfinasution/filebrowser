@@ -1,13 +1,15 @@
 # filebrowser
 Filebrowser + thumbnail viewer
-Expanded example based on lxn walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
+Expanded example based on lxn's excellent walk win32 libraries https://github.com/lxn/walk filebrowser example, adding many new
 features.
 
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser01.png?raw=true "screenshot")
 
 Why?
-Trying to see golang capabilities and performance in developing windows desktop app. 
+I'm trying to explore golang's capabilities and performance in developing a multithreaded and memory intensive windows desktop app.
 For inspiration and comparison, I used my old application, Antares12 which was built using Delphi2007.
+So far golang didn't disappoint!
+
 ![screenshot](https://github.com/lutfinasution/filebrowser/blob/master/image/filebrowser02.png?raw=true "screenshot")
 
 Features:
@@ -29,6 +31,13 @@ Additional excellent golang libraries used here:
   - https://github.com/mattn/go-sqlite3
   - https://github.com/fsnotify/fsnotify
   - https://github.com/anthonynsimon/bild/transform
-
+  
+Status:
+ - Go language constructs comfortably matched object pascal (delphi) constructs.
+ - Many low level routines can easily be converted to golang.
+ - Goroutines and channels are truly handy in handling concurrent tasks.
+ - Performance in performing cpu and memory intensive operations is excellent. Comparable and sometimes better than delphi.
+ - Memory comsumption is larger than delphi/32bit, but not by much. No optimization on my part yet.
+ - So far so good...
 
 
