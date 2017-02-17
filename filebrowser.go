@@ -11,7 +11,7 @@ import (
 	"log"
 	//"unsafe"
 	//"runtime"
-	"math"
+	//"math"
 	"strconv"
 	//"time"
 )
@@ -40,12 +40,11 @@ type mapSelection map[string]viewRecord
 
 type MyMainWindow struct {
 	*walk.MainWindow
-	toolbar *walk.CustomWidget
-	//paintWidget  *walk.CustomWidget
-	paintWidget     *CustomWidgetView
+	toolbar         *walk.CustomWidget
+	hSplit          *walk.Composite //Splitter
+	thumbView       *ScrollViewer
 	pgBar           *walk.ProgressBar
 	vspacebar       *walk.Slider
-	scrollWidget    *walk.ScrollView
 	btn1            *walk.PushButton
 	paintWidgetMenu *walk.Menu
 	topComposite    *walk.Composite
@@ -54,54 +53,30 @@ type MyMainWindow struct {
 	cmbAddr         *walk.ComboBox
 	sldrSize        *walk.Slider
 	cbCached        *walk.CheckBox
-	menuItemAction  *walk.Action
+	menuItemAction  *walk.Menu
 }
 
 func NewDirectory(name string, parent *Directory) *Directory {
 	return &Directory{name: name, parent: parent}
 }
 
-func (mw *MyMainWindow) SetupPaintAreaSize(numItems int, reset bool) bool {
-
-	if numItems > 0 {
-		//Readjusting the paintwidget height & its container's height to reflect the num of items
-		nCols := math.Trunc(float64(Mw.paintWidget.Width()) / float64(thumbR.twm()))
-		nRows := math.Ceil(float64(numItems) / nCols)
-
-		h := int(nRows) * thumbR.thm()
-		if h < Mw.scrollWidget.ClientBounds().Height {
-			h = Mw.scrollWidget.ClientBounds().Height
-		}
-		sz := walk.Size{Mw.scrollWidget.ClientBounds().Width - int(win.GetSystemMetrics(win.SM_CXVSCROLL)), h}
-		Mw.paintWidget.SetMinMaxSize(sz, sz)
-		Mw.scrollWidget.SendMessage(win.WM_SIZE, 0, 0)
-	} else {
-		Mw.paintWidget.SetMinMaxSize(walk.Size{4, 4}, walk.Size{5, 5})
-		Mw.scrollWidget.SendMessage(win.WM_SIZE, 0, 0)
-	}
-
-	if reset {
-		Mw.scrollWidget.AsContainerBase().SetY(0)
-	}
-	log.Println("Mw.paintWidget size", Mw.paintWidget.Size(), Mw.scrollWidget.ClientBounds().Height)
-	return true
-}
-
-func (mw *MyMainWindow) onSVSizeChanged() {
-	if mw.lblAddr != nil {
-		//mw.SetupPaintAreaSize(len(tableModel.items), false)
-	}
-}
-
 func (mw *MyMainWindow) OnBtn1Click() {
-	mw.paintWidget.Invalidate()
+
 }
 
 func (mw *MyMainWindow) OnToolbarClick(x, y int, button walk.MouseButton) {
-	//mw.paintWidget.Invalidate()
 
-	//mw.paintWidget.AsWidgetBase().SetY(-100)
-	//mw.scrollWidget.AsContainerBase().SetY(mw.scrollWidget.AsContainerBase().Y() - 100)
+	tableView.SetVisible(!tableView.Visible())
+
+	tableView.Parent().SendMessage(win.WM_SIZE, 0, 0)
+
+	if !tableView.Visible() {
+		//		tableView.SetMinMaxSize(walk.Size{0, 0}, walk.Size{10, 10})
+		//		tableView.SetBounds(walk.Rectangle{0, 0, 10, 10})
+		//tableView.SetParent(Mw)
+		//mw.Children().Add(tableView)
+	}
+
 }
 
 func (mw *MyMainWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
@@ -115,11 +90,8 @@ func (mw *MyMainWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
 	x1 := col * w
 	y1 := row * h
 
-	ctl := Mw.paintWidget
-	//ctl.SetFocus()
-	Mw.scrollWidget.SetFocus()
+	idx := col + row*Mw.thumbView.NumCols()
 
-	idx := col + row*int(float32(ctl.Bounds().Width)/float32(w))
 	if (idx >= 0) && (idx < len(tableModel.items)) {
 		tableView.SetSelectedIndexes([]int{idx})
 
@@ -129,12 +101,12 @@ func (mw *MyMainWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
 			bounds := image.Rect(x1, y1+h-thumbR.txth, x1+w, y1+h)
 			pt := image.Point{x, y}
 			if pt.In(bounds) {
-				ctl.SetContextMenu(Mw.paintWidgetMenu)
+				Mw.thumbView.SetContextMenu(Mw.menuItemAction)
 			} else {
-				ctl.SetContextMenu(nil)
+				Mw.thumbView.SetContextMenu(nil)
 			}
 		} else {
-			ctl.Invalidate()
+			Mw.thumbView.Invalidate()
 		}
 	}
 }
@@ -142,13 +114,12 @@ func (mw *MyMainWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
 var dummyimg draw.Image
 
 func (mw *MyMainWindow) onDrawPanelPaint(canvas *walk.Canvas, updateBounds walk.Rectangle) error {
-
-	RedrawScreen(canvas, updateBounds, mw.scrollWidget.ClientBounds())
+	RedrawScreen(canvas, updateBounds, mw.thumbView.Bounds())
 	return nil
 }
 
 func (mw *MyMainWindow) onTableColClick(n int) {
-	mw.paintWidget.Invalidate()
+	mw.thumbView.Invalidate()
 }
 
 func (mw *MyMainWindow) onToolbarSizeChanged() {
@@ -164,9 +135,12 @@ func (mw *MyMainWindow) OnToolbarCheckCache() {
 func (mw *MyMainWindow) OnToolbarCacheSize() {
 	thumbR.tw = mw.sldrSize.Value()
 	thumbR.th = int(float64(thumbR.tw) * float64(10) / float64(16))
-	mw.paintWidget.Invalidate()
 
+	//mw.SetupPaintAreaSize(len(tableModel.items), false, true)
 	mw.lblSize.SetText("Thumbsize: " + strconv.Itoa(thumbR.tw) + "x" + strconv.Itoa(thumbR.th))
+
+	mw.thumbView.SetItemSize(thumbR.twm(), thumbR.thm())
+	mw.thumbView.SetFocus()
 }
 
 func (mw *MyMainWindow) UpdateAddreebar(spath string) {
@@ -218,7 +192,7 @@ func main() {
 	//apply settings to window
 	app.SetSettings(settings)
 
-	cwv := new(CustomWidgetView)
+	//cwv := new(CustomWidgetView)
 
 	if err := (MainWindow{
 		AssignTo: &Mw.MainWindow,
@@ -243,99 +217,68 @@ func main() {
 				Children:      []Widget{},
 			},
 			HSplitter{
+				HandleWidth: 6,
 				Children: []Widget{
-					TreeView{
-						AssignTo:             &treeView,
-						Model:                treeModel,
-						OnCurrentItemChanged: OnTreeCurrentItemChanged,
-						Font:                 myFont,
-					},
-					TableView{
-						AssignTo:              &tableView,
-						StretchFactor:         1,
-						AlternatingRowBGColor: walk.RGB(255, 255, 224),
-						CheckBoxes:            true,
-						ColumnsOrderable:      true,
-						MultiSelection:        true,
-						Font:                  myFont,
-
-						Columns: []TableViewColumn{
-							TableViewColumn{
-								DataMember: "Name",
-								Width:      240,
-							},
-							TableViewColumn{
-								DataMember: "Size",
-								Format:     "%d",
-								Alignment:  AlignFar,
-								Width:      64,
-							},
-							TableViewColumn{
-								DataMember: "Modified",
-								Format:     "2006-01-02 15:04:05",
-								Width:      120,
-							},
-							TableViewColumn{
-								DataMember: "Type",
-								Width:      64,
-							},
-							TableViewColumn{
-								DataMember: "Width",
-								Alignment:  AlignFar,
-								Format:     "%d",
-								Width:      40,
-							},
-							TableViewColumn{
-								DataMember: "Height",
-								Alignment:  AlignFar,
-								Format:     "%d",
-								Width:      40,
-							},
-						},
-						Model: tableModel,
-						OnCurrentIndexChanged:    OnTableCurrentIndexChanged,
-						OnSelectedIndexesChanged: OnTableSelectedIndexesChanged,
-					},
-					ScrollView{
-						AssignTo:      &Mw.scrollWidget,
-						Layout:        VBox{Margins: Margins{Top: 0}, MarginsZero: true},
-						StretchFactor: 3,
-						OnSizeChanged: Mw.onSVSizeChanged,
+					HSplitter{
+						HandleWidth: 6,
 						Children: []Widget{
-							CustomWidget{
-								AssignTo:            &cwv.CustomWidget, //&Mw.paintWidget,
-								ClearsBackground:    true,
-								InvalidatesOnResize: true,
-								Paint:               Mw.onDrawPanelPaint,
-								OnMouseDown:         Mw.onDrawPanelMouseDn,
-								//OnMouseUp: Mw.onDrawPanelMouseDn,
-
-								ContextMenuItems: []MenuItem{
-									Action{
-										Text:     "&Delete",
-										AssignTo: &Mw.menuItemAction,
-										//Image:       "../img/open.png",
-										OnTriggered: Mw.OnBtn1Click,
+							TreeView{
+								AssignTo:             &treeView,
+								Model:                treeModel,
+								OnCurrentItemChanged: OnTreeCurrentItemChanged,
+								Font:                 myFont,
+							},
+							TableView{
+								AssignTo:              &tableView,
+								StretchFactor:         1,
+								AlternatingRowBGColor: walk.RGB(255, 255, 224),
+								CheckBoxes:            true,
+								ColumnsOrderable:      true,
+								MultiSelection:        true,
+								Font:                  myFont,
+								Columns: []TableViewColumn{
+									TableViewColumn{
+										DataMember: "Name",
+										Width:      240,
 									},
-									Separator{},
-									Action{
-										Text:        "&Rename",
-										AssignTo:    &Mw.menuItemAction,
-										OnTriggered: Mw.OnBtn1Click,
+									TableViewColumn{
+										DataMember: "Size",
+										Format:     "%d",
+										Alignment:  AlignFar,
+										Width:      64,
 									},
-									Action{
-										Text:        "&Copy to...",
-										AssignTo:    &Mw.menuItemAction,
-										OnTriggered: Mw.OnBtn1Click,
+									TableViewColumn{
+										DataMember: "Modified",
+										Format:     "2006-01-02 15:04:05",
+										Width:      120,
 									},
-									Action{
-										Text:        "&Move to...",
-										AssignTo:    &Mw.menuItemAction,
-										OnTriggered: Mw.OnBtn1Click,
+									TableViewColumn{
+										DataMember: "Type",
+										Width:      64,
+									},
+									TableViewColumn{
+										DataMember: "Width",
+										Alignment:  AlignFar,
+										Format:     "%d",
+										Width:      40,
+									},
+									TableViewColumn{
+										DataMember: "Height",
+										Alignment:  AlignFar,
+										Format:     "%d",
+										Width:      40,
 									},
 								},
+								Model: tableModel,
+								OnCurrentIndexChanged:    OnTableCurrentIndexChanged,
+								OnSelectedIndexesChanged: OnTableSelectedIndexesChanged,
 							},
 						},
+					},
+					Composite{
+						Layout:        HBox{MarginsZero: true},
+						StretchFactor: 2,
+						AssignTo:      &Mw.hSplit,
 					},
 				},
 			},
@@ -347,9 +290,16 @@ func main() {
 	}.Create()); err != nil {
 		log.Fatal(err)
 	}
-	if err := walk.InitWrapperWindow(cwv); err != nil {
-		log.Fatal(err)
-	}
+	//	if err := walk.InitWrapperWindow(cwv); err != nil {
+	//		log.Fatal(err)
+	//	}
+
+	Mw.StatusBar().SetVisible(true)
+	Mw.StatusBar().MouseUp().Attach(Mw.OnToolbarClick)
+
+	Mw.thumbView, _ = NewScrollViewer(Mw.hSplit, Mw.onDrawPanelPaint, 0, thumbR.twm(), thumbR.thm())
+	Mw.thumbView.SetMouseDown(Mw.onDrawPanelMouseDn)
+	Mw.thumbView.Show()
 
 	Mw.lblAddr, _ = walk.NewLabel(Mw.topComposite)
 	Mw.topComposite.Children().Add(Mw.lblAddr)
@@ -379,9 +329,31 @@ func main() {
 	Mw.cbCached.CheckedChanged().Attach(Mw.OnToolbarCheckCache)
 	Mw.topComposite.Children().Add(Mw.cbCached)
 
-	Mw.paintWidget = cwv
-	Mw.paintWidgetMenu = cwv.ContextMenu()
-	cwv.SetContextMenu(nil)
+	//context menus
+	menu, _ := walk.NewMenu()
+
+	itm := walk.NewMenuAction(menu)
+	itm.SetText("&Delete")
+	itm.Triggered().Attach(Mw.OnBtn1Click)
+	menu.Actions().Add(itm)
+
+	itm = walk.NewMenuAction(menu)
+	itm.SetText("&Rename")
+	itm.Triggered().Attach(Mw.OnBtn1Click)
+	menu.Actions().Add(itm)
+
+	itm = walk.NewMenuAction(menu)
+	itm.SetText("&Copy to...")
+	itm.Triggered().Attach(Mw.OnBtn1Click)
+	menu.Actions().Add(itm)
+
+	itm = walk.NewMenuAction(menu)
+	itm.SetText("&Move to...")
+	itm.Triggered().Attach(Mw.OnBtn1Click)
+	menu.Actions().Add(itm)
+	Mw.menuItemAction = menu
+
+	Mw.thumbView.SetContextMenu(menu)
 
 	//apply settings
 	if s, ok := settings.Get("Cached"); ok {
@@ -401,6 +373,7 @@ func main() {
 
 	Mw.sldrSize.SetValue(thumbR.tw)
 	tableView.ColumnClicked().Attach(Mw.onTableColClick)
+
 	//experimental net server
 	go StartNet()
 

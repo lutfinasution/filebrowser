@@ -54,10 +54,6 @@ var thumbR = ThumbRect{120, 75, 10, 10, 48}
 var donechan chan int
 var donewait sync.WaitGroup
 
-var doCache = false
-
-//var doCache = true
-
 func setImgcache(numJob int, dirpath string) bool {
 	if donechan != nil {
 		close(donechan)
@@ -96,9 +92,8 @@ func setImgcache(numJob int, dirpath string) bool {
 		}
 
 		//Load data from cache
-		if doCache {
-			CacheDBEnum(dirpath)
-		}
+		n := CacheDBEnum(dirpath)
+		log.Println("CacheDBEnum found", n, "in", dirpath)
 
 		for j := 0; j < grCount; j++ {
 			iStart := k
@@ -108,7 +103,7 @@ func setImgcache(numJob int, dirpath string) bool {
 				iStop = numJob
 			}
 
-			go doRendering(donechan, itms, iStart, iStop)
+			go doRenderTask(donechan, itms, iStart, iStop)
 
 			k = k + c
 		}
@@ -123,38 +118,36 @@ func setImgcache(numJob int, dirpath string) bool {
 		})
 		time.Sleep(time.Second)
 		Mw.Synchronize(func() {
-			Mw.paintWidget.Invalidate()
+			Mw.thumbView.Invalidate()
 			Mw.pgBar.SetValue(0)
 		})
 
-		if doCache {
-			cntupd, _ := CacheDBUpdate(dirpath)
-			log.Println("Cache items updated: ", cntupd)
-		}
+		cntupd, _ := CacheDBUpdateMapItems(ItemsMap, dirpath)
+
+		log.Println("Cache items processed: ", workCounter)
+		log.Println("Cache items updated: ", cntupd)
 	}()
 	return true
 }
 
 var workCounter int64
 
-func doRendering(done chan int, fnames []string, iStart, iStop int) bool {
+func doRenderTask(done chan int, fnames []string, iStart, iStop int) bool {
 	res := true
 loop:
 	for i := iStart; i < iStop; i++ {
 		select {
 		case <-done:
-			res = false
 			break loop
 		default:
-			if err := processImageData(fnames[i]); err != nil {
-				res = false
-			}
-			c := atomic.AddInt64(&workCounter, 1)
+			if ok := processImageData(fnames[i]); ok {
+				c := atomic.AddInt64(&workCounter, 1)
 
-			if c%10 == 0 {
-				Mw.pgBar.Synchronize(func() {
-					Mw.pgBar.SetValue(int(workCounter))
-				})
+				if c%10 == 0 {
+					Mw.pgBar.Synchronize(func() {
+						Mw.pgBar.SetValue(int(workCounter))
+					})
+				}
 			}
 		}
 	}
@@ -162,9 +155,9 @@ loop:
 	return res
 }
 
-func getOptimalThumbSize(dstW int, dstH int, srcW int, srcH int) (int, int) {
-	getW := func(h int, ws int, hs int) int { return int(float32(h) / float32(hs) * float32(ws)) }
-	getH := func(w int, ws int, hs int) int { return int(float32(w) / float32(ws) * float32(hs)) }
+func getOptimalThumbSize(dstW, dstH, srcW, srcH int) (int, int) {
+	getW := func(h, ws, hs int) int { return int(float32(h) / float32(hs) * float32(ws)) }
+	getH := func(w, ws, hs int) int { return int(float32(w) / float32(ws) * float32(hs)) }
 
 	w := 0
 	h := 0
@@ -188,24 +181,28 @@ func getOptimalThumbSize(dstW int, dstH int, srcW int, srcH int) (int, int) {
 	return w, h
 }
 
-func processImageData(mkey string) error {
+func processImageData(mkey string) bool {
 
 	v, ok := ItemsMap[mkey]
 	if !ok {
-		return nil
+		return false
 	}
-
+	if v.Changed {
+		log.Println("processImageData/want to process ", mkey, doCache, v.HasData(), v.Changed)
+	}
 	//Skip thumb creation if ItemsMap already has data.
-	if doCache && v.Imagedata != nil {
-		if !v.Changed {
-			return nil
-		}
+	//and cache=true
+	//and changed=false
+	if doCache && v.HasData() && !v.Changed {
+		return false
 	}
+	log.Println("processImageData/processing: ", mkey)
+
 	//open
 	file, err := os.Open(mkey)
 	if err != nil {
-		log.Fatal(err)
-		return err
+		//log.Fatal(err)
+		return false
 	}
 	defer file.Close()
 
@@ -242,11 +239,11 @@ func processImageData(mkey string) error {
 	}
 
 	if img == nil {
-		return nil
+		return false
 	}
 
 	if img.Bounds().Dx() < 8 {
-		return nil
+		return false
 	}
 
 	w, h := getOptimalThumbSize(thumbR.tw, thumbR.th, img.Bounds().Dx(), img.Bounds().Dy())
@@ -265,10 +262,11 @@ func processImageData(mkey string) error {
 		buf.Read(v.Imagedata)
 		v.Changed = false
 	} else {
-		log.Fatal(err)
+		//log.Fatal(err)
+		return false
 	}
 
-	return nil
+	return true
 }
 
 func renderImageDataTo(mkey string, buf []byte, dst *image.RGBA, x int, y int, selected bool) error {
@@ -324,6 +322,7 @@ func renderImageDataTo(mkey string, buf []byte, dst *image.RGBA, x int, y int, s
 
 var cList chan *FileInfo
 var changeMap ItmMap
+var doneMap ItmMap
 
 func removeChangedItem(mkey string) {
 	if changeMap != nil {
@@ -332,32 +331,58 @@ func removeChangedItem(mkey string) {
 		}
 	}
 }
-
+func removeChangedItems(cmp ItmMap) {
+	if cmp != nil {
+		for k, _ := range cmp {
+			delete(cmp, k)
+		}
+	}
+}
 func submitChangedItem(mkey string, cItm *FileInfo) {
 	if changeMap == nil {
 		changeMap = make(ItmMap)
 	}
-	changeMap[mkey] = cItm
-	changeMap[mkey].Changed = true
+	if doneMap == nil {
+		doneMap = make(ItmMap)
+	}
+
+	if _, ok := doneMap[mkey]; !ok {
+		if _, ok := changeMap[mkey]; !ok {
+			changeMap[mkey] = cItm
+			changeMap[mkey].Changed = true
+		}
+	}
 }
+
+var cProc bool
 
 func processChangedItem() {
 	if changeMap == nil {
 		return
 	}
+	if len(changeMap) == 0 {
+		return
+	}
+	if !cProc {
+		go func() {
+			i := 0
+			cProc = true
+			log.Println("processChangedItem------------------------------------------------------------------------")
+			for k, v := range changeMap {
+				if processImageData(k) {
+					i++
+					doneMap[k] = v
+				}
+			}
 
-	go func() {
-		for k, _ := range changeMap {
-			//log.Println("CacheDBUpdateItemFromBuffer: ", v.Name)
-
-			processImageData(k)
-
-			CacheDBUpdateItem(k)
-
-			removeChangedItem(k)
-		}
-		log.Println("CacheDBUpdateItemFromBuffer: ", len(changeMap))
-	}()
+			n, _ := CacheDBUpdateMapItems(doneMap, "")
+			removeChangedItems(changeMap)
+			removeChangedItems(doneMap)
+			log.Println("processChangedItem/processImageData: ", i)
+			log.Println("processChangedItem/CacheDBUpdateMapItems: ", n)
+			cProc = false
+		}()
+	}
 }
 
 func RenderImage(name string) (walk.Size, error) {
@@ -476,9 +501,21 @@ func RedrawScreen(canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds w
 	if (ItemsMap == nil) || (len(tableModel.items) == 0) {
 		return nil
 	}
-	t := time.Now()
+	//t := time.Now()
 
 	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
+
+	brushColor := walk.RGB(20, 20, 20)
+
+	brush, err := walk.NewSolidColorBrush(brushColor)
+	if err != nil {
+		return err
+	}
+	defer brush.Dispose()
+
+	if err := canvas.FillRectangle(brush, updateBounds); err != nil {
+		return nil
+	}
 
 	//create a base rgba image, will be used multiple times
 	w := thumbR.twm()
@@ -523,28 +560,19 @@ func RedrawScreen(canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds w
 		}
 	}
 	defer processChangedItem()
-	log.Println("redraw time", icount, "items in", time.Since(t).Seconds())
-
-	//	yTop := mw.scrollWidget.AsContainerBase().Y()
-
-	//	if yTop%thumbR.thm() != 0 {
-	//		numrows += 1
-	//	}
-	//	startrow := (yTop / thumbR.thm())
-	//	nextrow := int(math.Ceil(float64(-yTop+viewbounds.Height) / float64(thumbR.thm())))
-
-	//	log.Println("viewspec: ytop:", yTop, "numcols:", numcols, "numrows:", numrows, "startrow:", startrow, "nextrow", nextrow, viewbounds)
 
 	return nil
 }
 
 var (
-	dpi      = flag.Float64("dpi", 96, "screen resolution in Dots Per Inch")
-	fontfile = flag.String("fontfile", "../../golang/freetype/testdata/luxisr.ttf", "filename of the ttf font")
-	hinting  = flag.String("hinting", "none", "none | full")
-	size     = flag.Float64("size", 10, "font size in points")
-	spacing  = flag.Float64("spacing", 1.1, "line spacing (e.g. 2 means double spaced)")
-	wonb     = flag.Bool("whiteonblack", false, "white text on a black background")
+	dpi = flag.Float64("dpi", 96, "screen resolution in Dots Per Inch")
+	//fontfile = flag.String("fontfile", "../../golang/freetype/testdata/luxisr.ttf", "filename of the ttf font")
+	fontfile = flag.String("fontfile", "../../golang/freetype/testdata/LaoUI.ttf", "filename of the ttf font")
+
+	hinting = flag.String("hinting", "none", "none | full")
+	size    = flag.Float64("size", 10, "font size in points")
+	spacing = flag.Float64("spacing", 1.1, "line spacing (e.g. 2 means double spaced)")
+	wonb    = flag.Bool("whiteonblack", false, "white text on a black background")
 )
 
 var fontBytes []byte
@@ -619,6 +647,7 @@ func drawtext(text []string, dst *image.RGBA) {
 			Y: fixed.I(y),
 		}
 		d.DrawString(s)
+
 		y += dy
 	}
 }

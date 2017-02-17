@@ -21,6 +21,7 @@ const sqlCreateTable = `CREATE TABLE IF NOT EXISTS usercache (
 	`
 
 var CacheDB *sql.DB
+var doCache = false
 
 func crc32FromName(name string) uint32 {
 	return crc32.ChecksumIEEE([]byte(name))
@@ -33,7 +34,6 @@ func checkErr(err error) {
 }
 
 func CreateCacheDB(fdbname string) bool {
-
 	var err error
 	fdbname = "./cache.db"
 	CacheDB, err = sql.Open("sqlite3", fdbname)
@@ -43,7 +43,7 @@ func CreateCacheDB(fdbname string) bool {
 	_, err = CacheDB.Exec(sqlCreateTable)
 	checkErr(err)
 
-	log.Println("db write", err)
+	log.Println("db opened")
 	return true
 }
 
@@ -55,7 +55,102 @@ func CloseCacheDB() bool {
 	return true
 }
 
-func CacheDBUpdate(fpath string) (int64, bool) {
+func CacheDBEnum(fpath string) int {
+	if !doCache {
+		return 0
+	}
+
+	idpath := fmt.Sprint(crc32FromName(fpath))
+	sSql := "select idpathcrc, iditemcrc, itemdata from usercache where idpathcrc = " + idpath
+
+	rows, err := CacheDB.Query(sSql)
+	if err != nil {
+		doCache = false
+		return 0
+	}
+	defer rows.Close()
+
+	i := 0
+	for rows.Next() {
+		var id1, id2 int
+		var imgdata []byte
+
+		err = rows.Scan(&id1, &id2, &imgdata)
+		if err != nil {
+			log.Fatal(err)
+		}
+		for k, v := range ItemsMap {
+			if crc32FromName(k) == uint32(id2) {
+				v.Imagedata = imgdata
+				i += 1
+				break
+			}
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return i
+}
+
+//func CacheDBUpdate(fpath string) (int64, bool) {
+//	if !doCache {
+//		return 0, false
+//	}
+
+//	defer func() {
+//		if err := recover(); err != nil { //catch
+//			log.Println("recover")
+//			//os.Exit(1)
+//		}
+//	}()
+
+//	tx, err := CacheDB.Begin()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+
+//	sSql := "INSERT OR REPLACE into usercache(idpathcrc, iditemcrc, itemdata) values(?, ?, ?);"
+
+//	stmt, err := tx.Prepare(sSql)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	defer stmt.Close()
+
+//	var res sql.Result
+//	i := int64(0)
+//	for k, v := range ItemsMap {
+//		if filepath.Dir(k) == fpath {
+//			//if v.Changed {
+//			buf := v.Imagedata
+
+//			res, err = stmt.Exec(crc32FromName(filepath.Dir(k)), crc32FromName(k), buf)
+//			if err != nil {
+//				log.Fatal(err)
+//			}
+//			v.Changed = false
+//			rcnt, _ := res.RowsAffected()
+//			i += rcnt
+//			//}
+//		}
+//	}
+
+//	err = tx.Commit()
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+
+//	//log.Println("db write attempt for ", i, fpath)
+//	return i, true
+//}
+
+func CacheDBUpdateMapItems(itmap ItmMap, fpath string) (int64, bool) {
+	if !doCache || len(itmap) == 0 {
+		return 0, false
+	}
+
 	defer func() {
 		if err := recover(); err != nil { //catch
 			log.Println("recover")
@@ -68,7 +163,6 @@ func CacheDBUpdate(fpath string) (int64, bool) {
 		log.Fatal(err)
 	}
 
-	//sSql := "insert OR IGNORE into usercache(idpathcrc, iditemcrc, itemdata) values(?, ?, ?);"
 	sSql := "INSERT OR REPLACE into usercache(idpathcrc, iditemcrc, itemdata) values(?, ?, ?);"
 
 	stmt, err := tx.Prepare(sSql)
@@ -78,20 +172,25 @@ func CacheDBUpdate(fpath string) (int64, bool) {
 	defer stmt.Close()
 
 	var res sql.Result
+	var bDoit bool
 	i := int64(0)
-	for k, v := range ItemsMap {
-		if filepath.Dir(k) == fpath {
-			if v.Changed {
-				buf := v.Imagedata
+	for k, v := range itmap {
 
-				res, err = stmt.Exec(crc32FromName(filepath.Dir(k)), crc32FromName(k), buf)
-				if err != nil {
-					log.Fatal(err)
-				}
-				v.Changed = false
-				rcnt, _ := res.RowsAffected()
-				i += rcnt
+		if fpath == "" {
+			bDoit = true
+		} else {
+			bDoit = (filepath.Dir(k) == fpath)
+		}
+		if bDoit {
+			buf := v.Imagedata
+
+			res, err = stmt.Exec(crc32FromName(filepath.Dir(k)), crc32FromName(k), buf)
+			if err != nil {
+				log.Fatal(err)
 			}
+			v.Changed = false
+			rcnt, _ := res.RowsAffected()
+			i += rcnt
 		}
 	}
 
@@ -105,6 +204,10 @@ func CacheDBUpdate(fpath string) (int64, bool) {
 }
 
 func CacheDBUpdateItem(mkey string) error {
+	if !doCache {
+		return nil
+	}
+
 	tx, err := CacheDB.Begin()
 	if err != nil {
 		return err
@@ -144,9 +247,10 @@ func CacheDBUpdateItem(mkey string) error {
 }
 
 func CacheDBUpdateItemFromBuffer(mkey string, buf []byte) error {
-	if buf == nil {
+	if !doCache || buf == nil {
 		return nil
 	}
+
 	tx, err := CacheDB.Begin()
 	if err != nil {
 		return err
@@ -178,35 +282,4 @@ func CacheDBUpdateItemFromBuffer(mkey string, buf []byte) error {
 
 	//log.Println("db write attempt for ", i, fpath)
 	return err
-}
-
-func CacheDBEnum(fpath string) {
-	idpath := fmt.Sprint(crc32FromName(fpath))
-	sSql := "select idpathcrc, iditemcrc, itemdata from usercache where idpathcrc = " + idpath
-
-	rows, err := CacheDB.Query(sSql)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var id1, id2 int
-		var imgdata []byte
-
-		err = rows.Scan(&id1, &id2, &imgdata)
-		if err != nil {
-			log.Fatal(err)
-		}
-		for k, v := range ItemsMap {
-			if crc32FromName(k) == uint32(id2) {
-				v.Imagedata = imgdata
-				break
-			}
-		}
-	}
-	err = rows.Err()
-	if err != nil {
-		log.Fatal(err)
-	}
 }

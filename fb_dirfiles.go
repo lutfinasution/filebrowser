@@ -21,8 +21,14 @@ type FileInfo struct {
 	Type          string
 	checked       bool
 	Changed       bool
+	Locked        bool
 	Width, Height int
+	LastState     string
 	Imagedata     []byte
+}
+
+func (f FileInfo) HasData() bool {
+	return (f.Imagedata != nil)
 }
 
 type FileInfoModel struct {
@@ -117,6 +123,9 @@ func (m *FileInfoModel) SetDirPath(dirPath string) error {
 
 	numItems := len(m.items)
 	if numItems > 0 {
+		//--------------------------------------
+		//create map containing the file infos
+		//--------------------------------------
 		if ItemsMap == nil {
 			ItemsMap = make(map[string]*FileInfo)
 		}
@@ -138,18 +147,18 @@ func (m *FileInfoModel) SetDirPath(dirPath string) error {
 
 		//setup folder watcher
 		setFolderWatcher(dirPath)
-
-		Mw.UpdateAddreebar(dirPath)
 	} else {
 		//setup folder watcher
 		setFolderWatcher("")
 	}
 
-	//Readjusting the paintwidget height & its container's height to reflect the num of items
-	Mw.SetupPaintAreaSize(numItems, true)
-	//Mw.paintWidget.Invalidate()
-	Mw.MainWindow.SetTitle(dirPath + " (" + strconv.Itoa(numItems) + " files)")
+	//Updating the paintwidget height & its container's height to reflect the num of items
+	Mw.thumbView.SetItemCount(numItems)
+	Mw.thumbView.ResetPos()
+
 	Mw.pgBar.SetValue(0)
+	Mw.MainWindow.SetTitle(dirPath + " (" + strconv.Itoa(numItems) + " files)")
+	Mw.UpdateAddreebar(dirPath)
 	log.Println("Files in path: ", numItems)
 
 	return nil
@@ -166,6 +175,83 @@ type fsWatcher struct {
 }
 
 var fsw fsWatcher
+var watchmap ItmMap
+
+func FSsetNewItem(mkey string) {
+	info, err := os.Lstat(mkey)
+	if err != nil {
+		return
+	}
+
+	name := info.Name()
+	imgType := filepath.Ext(name)
+	imgInfo := walk.Size{0, 0}
+
+	//Retrieve image dimension, etc based on type
+	switch imgType {
+	case
+		".gif", ".jpg", ".jpeg", ".png", ".webp":
+		imgInfo, err = GetImageInfo(mkey)
+
+		ItemsMap[mkey] = &FileInfo{
+			Name:     name,
+			Size:     info.Size(),
+			Modified: info.ModTime(),
+			Type:     imgType,
+			Width:    imgInfo.Width,
+			Height:   imgInfo.Height,
+			//Changed:   true,
+			LastState: "",
+		}
+
+		tableModel.items = append(tableModel.items, ItemsMap[mkey])
+		tableModel.PublishRowsReset()
+
+		submitChangedItem(mkey, ItemsMap[mkey])
+		processChangedItem()
+
+		numItems := len(tableModel.items)
+		Mw.thumbView.SetItemCount(numItems)
+		Mw.MainWindow.SetTitle(filepath.Dir(mkey) + " (" + strconv.Itoa(numItems) + " files)")
+
+		submitChangedItem(mkey, ItemsMap[mkey])
+		processChangedItem()
+
+		log.Println("FSsetNewItem: ", mkey, ItemsMap[mkey])
+	}
+}
+
+func FSremoveItem(mkey string, wasRenamed bool) {
+	_, ok := ItemsMap[mkey]
+	if ok {
+		delete(ItemsMap, mkey)
+
+		m := tableModel.items
+		name := filepath.Base(mkey)
+		for i := range m {
+			if m[i].Name == name {
+				m[i] = m[len(m)-1]
+				tableModel.items = m[:len(m)-1]
+				tableModel.PublishRowsReset()
+
+				if !wasRenamed {
+					log.Println("FSremoveItem: ", mkey)
+
+					numItems := len(tableModel.items)
+					Mw.thumbView.SetItemCount(numItems)
+					Mw.MainWindow.SetTitle(filepath.Dir(mkey) + " (" + strconv.Itoa(numItems) + " files)")
+				} else {
+					log.Println("FSrenameItem --> FSremoveItem: ", mkey)
+				}
+				break
+			}
+		}
+	}
+}
+
+func FSrenameItem(mkey string) {
+	FSremoveItem(mkey, true)
+}
 
 func processWatcher(wfs *fsWatcher) bool {
 	var t time.Time
@@ -182,7 +268,7 @@ loop:
 			break loop
 		default:
 			<-timer.C
-			//log.Println("TickerEvent...")
+			//continue watching, reduce watchevent counter by 1
 			if wfs.watchevents > 0 {
 				i = atomic.AddInt64(&wfs.watchevents, -1)
 
@@ -191,6 +277,8 @@ loop:
 				log.Println("Event detected at ", t, i)
 			}
 
+			//exit loop when counter is 0
+			//delay by 3 sec
 			if hasEvent && (wfs.watchevents == 0) {
 				if time.Since(t) > time.Second*3 {
 					log.Println("Event detection expire at ", time.Now())
@@ -205,10 +293,24 @@ loop:
 	wfs.watchwait.Done()
 
 	if hasEvent {
-		tableModel.SetDirPath(tableModel.dirPath)
+		//tableModel.SetDirPath(tableModel.dirPath)
+
+		for k, v := range watchmap {
+			switch v.LastState {
+			case "modify", "create":
+				FSsetNewItem(k)
+			case "remove":
+				FSremoveItem(k, false)
+			case "rename":
+				FSrenameItem(k)
+			}
+			delete(watchmap, k)
+		}
+
 	}
 	fsw.activeproc = false
 	log.Println("Closing watch processor ", time.Now())
+
 	return res
 }
 
@@ -225,10 +327,12 @@ func setFolderWatcher(watchpath string) {
 
 	if fsw.watchActive {
 		log.Printf("setFolderWatcher entering...")
+
 		if (fsw.lastwatchpath == watchpath) || (watchpath == "") {
 			log.Printf("skip watch, same path")
 			return
 		}
+
 		log.Println("attempting to close watch on last: ", fsw.lastwatchpath, fsw.activeproc)
 
 		//if fsw.watchdone != nil {
@@ -284,10 +388,18 @@ func setFolderWatcher(watchpath string) {
 				if hasEvent {
 					fsw.watchevents += 1
 					log.Println(evType+": ", event.Name)
+
+					if watchmap == nil {
+						watchmap = make(ItmMap)
+					}
+
+					watchmap[event.Name] = &FileInfo{Name: event.Name, LastState: evType}
+
 					if !fsw.activeproc {
 						fsw.activeproc = true
 						fsw.watchwait.Add(1)
 						fsw.watchdone = make(chan int, 1)
+
 						go processWatcher(&fsw)
 					}
 				}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 import (
@@ -14,7 +15,18 @@ import (
 type Directory struct {
 	name     string
 	parent   *Directory
-	children []*Directory
+	children DirSlice //[]*Directory
+}
+type DirSlice []*Directory
+
+func (d DirSlice) Len() int {
+	return len(d)
+}
+func (d DirSlice) Swap(i, j int) {
+	d[i], d[j] = d[j], d[i]
+}
+func (d DirSlice) Less(i, j int) bool {
+	return d[i].name < d[j].name
 }
 
 type DirectoryTreeModel struct {
@@ -75,6 +87,12 @@ func (d *Directory) ResetChildren() error {
 		}
 
 		d.children = append(d.children, NewDirectory(name, d))
+
+		dc := d.children
+		sort.Sort(dc)
+		d.children = dc
+
+		log.Println("dir: ", name)
 
 		return filepath.SkipDir
 	}); err != nil {
