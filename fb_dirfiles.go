@@ -15,16 +15,20 @@ import (
 )
 
 type FileInfo struct {
-	Name          string
-	Size          int64
-	Modified      time.Time
-	Type          string
-	checked       bool
-	Changed       bool
-	Locked        bool
-	Width, Height int
-	LastState     string
-	Imagedata     []byte
+	Name           string
+	index          int
+	Size           int64
+	Modified       time.Time
+	Type           string
+	checked        bool
+	Changed        bool
+	Locked         bool
+	dbsynched      bool
+	Width, Height  int
+	thumbW, thumbH int
+	LastState      string
+	drawRect       walk.Rectangle
+	Imagedata      []byte
 }
 
 func (f FileInfo) HasData() bool {
@@ -33,6 +37,7 @@ func (f FileInfo) HasData() bool {
 
 type FileInfoModel struct {
 	walk.SortedReflectTableModelBase
+	viewer    *ScrollViewer
 	sortOrder walk.SortOrder
 	dirPath   string
 	items     []*FileInfo
@@ -41,10 +46,6 @@ type FileInfoModel struct {
 func (f FileInfoModel) getFullPath(idx int) string {
 	return filepath.Join(f.dirPath, f.items[idx].Name)
 }
-
-type ItmMap map[string]*FileInfo
-
-var ItemsMap ItmMap
 
 func NewFileInfoModel() *FileInfoModel {
 	m := new(FileInfoModel)
@@ -71,51 +72,108 @@ func (m *FileInfoModel) Image(row int) interface{} {
 	return filepath.Join(m.dirPath, m.items[row].Name)
 }
 
-func (m *FileInfoModel) SetDirPath(dirPath string) error {
+func (m *FileInfoModel) BrowsePath(dirPath string, doHistory bool) error {
+	if doHistory {
+		AppSetDirSettings(m.viewer, m.dirPath)
+	}
+
 	m.dirPath = dirPath
 	m.items = nil
 
-	if err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if info == nil {
+	if err := filepath.Walk(dirPath,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if info == nil {
+					return filepath.SkipDir
+				}
+			}
+			name := info.Name()
+
+			if path == dirPath || shouldExclude(name) {
+				return nil
+			}
+			url := filepath.Join(dirPath, name)
+			imgType := filepath.Ext(name)
+			imgInfo := walk.Size{0, 0}
+
+			//Retrieve image dimension, etc based on type
+			switch imgType {
+			case
+				".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp":
+				imgInfo, err = GetImageInfo(url)
+
+				item := &FileInfo{
+					Name:     name,
+					Size:     info.Size(),
+					Modified: info.ModTime(),
+					Type:     imgType,
+					Width:    imgInfo.Width,
+					Height:   imgInfo.Height,
+					Changed:  false,
+				}
+				m.items = append(m.items, item)
+			}
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
-		}
 
-		name := info.Name()
-
-		if path == dirPath || shouldExclude(name) {
 			return nil
-		}
+		}); err != nil {
+		return err
+	}
 
-		url := filepath.Join(dirPath, name)
-		imgType := filepath.Ext(name)
-		imgInfo := walk.Size{0, 0}
+	m.PublishRowsReset()
 
-		//Retrieve image dimension, etc based on type
-		switch imgType {
-		case
-			".gif", ".jpg", ".jpeg", ".png", ".webp":
-			imgInfo, err = GetImageInfo(url)
+	return nil
+}
 
-			item := &FileInfo{
-				Name:     name,
-				Size:     info.Size(),
-				Modified: info.ModTime(),
-				Type:     imgType,
-				Width:    imgInfo.Width,
-				Height:   imgInfo.Height,
-				Changed:  false,
+func (m *FileInfoModel) SetDirPath(dirPath string, doHistory bool) error {
+	if doHistory {
+		AppSetDirSettings(m.viewer, m.dirPath)
+	}
+
+	m.dirPath = dirPath
+	m.items = nil
+
+	if err := filepath.Walk(dirPath,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if info == nil {
+					return filepath.SkipDir
+				}
 			}
-			m.items = append(m.items, item)
-		}
+			name := info.Name()
 
-		if info.IsDir() {
-			return filepath.SkipDir
-		}
+			if path == dirPath || shouldExclude(name) {
+				return nil
+			}
+			url := filepath.Join(dirPath, name)
+			imgType := filepath.Ext(name)
+			imgInfo := walk.Size{0, 0}
 
-		return nil
-	}); err != nil {
+			//Retrieve image dimension, etc based on type
+			switch imgType {
+			case
+				".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp":
+				imgInfo, err = GetImageInfo(url)
+
+				item := &FileInfo{
+					Name:     name,
+					Size:     info.Size(),
+					Modified: info.ModTime(),
+					Type:     imgType,
+					Width:    imgInfo.Width,
+					Height:   imgInfo.Height,
+					Changed:  false,
+				}
+				m.items = append(m.items, item)
+			}
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+
+			return nil
+		}); err != nil {
 		return err
 	}
 
@@ -123,48 +181,33 @@ func (m *FileInfoModel) SetDirPath(dirPath string) error {
 
 	numItems := len(m.items)
 	if numItems > 0 {
-		//--------------------------------------
 		//create map containing the file infos
-		//--------------------------------------
-		if ItemsMap == nil {
-			ItemsMap = make(map[string]*FileInfo)
-		}
-
-		for i := range m.items {
-			fn := filepath.Join(dirPath, m.items[i].Name)
-
-			if mp, ok := ItemsMap[fn]; !ok {
-				ItemsMap[fn] = m.items[i]
-			} else {
-				mp.Changed = (m.items[i].Size != mp.Size) || (m.items[i].Modified != mp.Modified)
-				mp.Size = m.items[i].Size
-				mp.Modified = m.items[i].Modified
-			}
-		}
-
-		//launch image cache setup
-		setImgcache(numItems, dirPath)
-
-		//setup folder watcher
-		setFolderWatcher(dirPath)
+		Mw.thumbView.Run(dirPath, m, true)
 	} else {
-		//setup folder watcher
-		setFolderWatcher("")
+		Mw.thumbView.SetItemsCount(0)
 	}
 
-	//Updating the paintwidget height & its container's height to reflect the num of items
-	Mw.thumbView.SetItemCount(numItems)
-	Mw.thumbView.ResetPos()
-
-	Mw.pgBar.SetValue(0)
+	Mw.StatusBar().Invalidate()
 	Mw.MainWindow.SetTitle(dirPath + " (" + strconv.Itoa(numItems) + " files)")
 	Mw.UpdateAddreebar(dirPath)
 	log.Println("Files in path: ", numItems)
 
 	return nil
 }
+func AppSetDirSettings(sv *ScrollViewer, dirPath string) {
+	settings.Put(dirPath, strconv.Itoa(sv.viewInfo.topPos))
+}
+func AppGetDirSettings(sv *ScrollViewer, dirPath string) {
+	if s, ok := settings.Get(dirPath); ok {
+		sv.viewInfo.topPos, _ = strconv.Atoi(s)
 
-type fsWatcher struct {
+		sv.SetScrollPos(sv.viewInfo.topPos)
+	}
+}
+
+type DirectoryMonitor struct {
+	viewer        *ScrollViewer
+	watchmap      ItmMap
 	lastwatchpath string
 	watchdone     chan int
 	watchwait     sync.WaitGroup
@@ -172,12 +215,12 @@ type fsWatcher struct {
 	watchActive   bool
 	watcher       *fsnotify.Watcher
 	activeproc    bool
+	infofunc      func(dir string)
+	imagemon      *ContentMonitor
 }
 
-var fsw fsWatcher
-var watchmap ItmMap
+func (dm *DirectoryMonitor) FSsetNewItem(mkey string) {
 
-func FSsetNewItem(mkey string) {
 	info, err := os.Lstat(mkey)
 	if err != nil {
 		return
@@ -193,53 +236,50 @@ func FSsetNewItem(mkey string) {
 		".gif", ".jpg", ".jpeg", ".png", ".webp":
 		imgInfo, err = GetImageInfo(mkey)
 
-		ItemsMap[mkey] = &FileInfo{
-			Name:     name,
-			Size:     info.Size(),
-			Modified: info.ModTime(),
-			Type:     imgType,
-			Width:    imgInfo.Width,
-			Height:   imgInfo.Height,
-			//Changed:   true,
-			LastState: "",
+		//if item already exists,
+		if v, ok := dm.viewer.ItemsMap[mkey]; ok {
+			v.Size = info.Size()
+			v.Modified = info.ModTime()
+			v.Width = imgInfo.Width
+			v.Height = imgInfo.Height
+		} else {
+			dm.viewer.ItemsMap[mkey] = &FileInfo{
+				Name:      name,
+				Size:      info.Size(),
+				Modified:  info.ModTime(),
+				Type:      imgType,
+				Width:     imgInfo.Width,
+				Height:    imgInfo.Height,
+				LastState: "",
+				//Changed:   true,
+			}
+			//adding new item to list
+			dm.viewer.itemsModel.items = append(dm.viewer.itemsModel.items, dm.viewer.ItemsMap[mkey])
+			dm.viewer.SetItemsCount(len(dm.viewer.itemsModel.items))
 		}
+		dm.imagemon.submitChangedItem(mkey, dm.viewer.ItemsMap[mkey])
 
-		tableModel.items = append(tableModel.items, ItemsMap[mkey])
-		tableModel.PublishRowsReset()
-
-		submitChangedItem(mkey, ItemsMap[mkey])
-		processChangedItem()
-
-		numItems := len(tableModel.items)
-		Mw.thumbView.SetItemCount(numItems)
-		Mw.MainWindow.SetTitle(filepath.Dir(mkey) + " (" + strconv.Itoa(numItems) + " files)")
-
-		submitChangedItem(mkey, ItemsMap[mkey])
-		processChangedItem()
-
-		log.Println("FSsetNewItem: ", mkey, ItemsMap[mkey])
+		log.Println("FSsetNewItem: ", mkey, dm.viewer.ItemsMap[mkey])
 	}
 }
 
-func FSremoveItem(mkey string, wasRenamed bool) {
-	_, ok := ItemsMap[mkey]
+func (dm *DirectoryMonitor) FSremoveItem(mkey string, wasRenamed bool) {
+	_, ok := dm.viewer.ItemsMap[mkey]
 	if ok {
-		delete(ItemsMap, mkey)
+		delete(dm.viewer.ItemsMap, mkey)
 
-		m := tableModel.items
+		m := dm.viewer.itemsModel.items
 		name := filepath.Base(mkey)
 		for i := range m {
 			if m[i].Name == name {
 				m[i] = m[len(m)-1]
-				tableModel.items = m[:len(m)-1]
-				tableModel.PublishRowsReset()
+
+				//remove item from list
+				dm.viewer.itemsModel.items = m[:len(m)-1]
+				dm.viewer.SetItemsCount(len(dm.viewer.itemsModel.items))
 
 				if !wasRenamed {
 					log.Println("FSremoveItem: ", mkey)
-
-					numItems := len(tableModel.items)
-					Mw.thumbView.SetItemCount(numItems)
-					Mw.MainWindow.SetTitle(filepath.Dir(mkey) + " (" + strconv.Itoa(numItems) + " files)")
 				} else {
 					log.Println("FSrenameItem --> FSremoveItem: ", mkey)
 				}
@@ -249,11 +289,11 @@ func FSremoveItem(mkey string, wasRenamed bool) {
 	}
 }
 
-func FSrenameItem(mkey string) {
-	FSremoveItem(mkey, true)
+func (dm *DirectoryMonitor) FSrenameItem(mkey string) {
+	dm.FSremoveItem(mkey, true)
 }
 
-func processWatcher(wfs *fsWatcher) bool {
+func (dm *DirectoryMonitor) processWatcher() bool {
 	var t time.Time
 	var i int64
 	timer := time.NewTicker(time.Millisecond * 1)
@@ -263,14 +303,14 @@ func processWatcher(wfs *fsWatcher) bool {
 loop:
 	for {
 		select {
-		case <-wfs.watchdone:
+		case <-dm.watchdone:
 			res = false
 			break loop
 		default:
 			<-timer.C
 			//continue watching, reduce watchevent counter by 1
-			if wfs.watchevents > 0 {
-				i = atomic.AddInt64(&wfs.watchevents, -1)
+			if dm.watchevents > 0 {
+				i = atomic.AddInt64(&dm.watchevents, -1)
 
 				hasEvent = true
 				t = time.Now()
@@ -279,7 +319,7 @@ loop:
 
 			//exit loop when counter is 0
 			//delay by 3 sec
-			if hasEvent && (wfs.watchevents == 0) {
+			if hasEvent && (dm.watchevents == 0) {
 				if time.Since(t) > time.Second*3 {
 					log.Println("Event detection expire at ", time.Now())
 					res = true
@@ -290,25 +330,29 @@ loop:
 	}
 
 	timer.Stop()
-	wfs.watchwait.Done()
+	dm.watchwait.Done()
 
 	if hasEvent {
-		//tableModel.SetDirPath(tableModel.dirPath)
+		log.Println("processWatcher found", len(dm.watchmap))
 
-		for k, v := range watchmap {
+		for k, v := range dm.watchmap {
 			switch v.LastState {
 			case "modify", "create":
-				FSsetNewItem(k)
+				dm.FSsetNewItem(k)
 			case "remove":
-				FSremoveItem(k, false)
+				dm.FSremoveItem(k, false)
 			case "rename":
-				FSrenameItem(k)
+				dm.FSrenameItem(k)
 			}
-			delete(watchmap, k)
+			delete(dm.watchmap, k)
 		}
 
+		if dm.viewer != nil {
+			//this will handle changes in the underlying data
+			dm.viewer.directoryMonitorInfoHandler(dm.lastwatchpath)
+		}
 	}
-	fsw.activeproc = false
+	dm.activeproc = false
 	log.Println("Closing watch processor ", time.Now())
 
 	return res
@@ -318,54 +362,60 @@ func dorecover() {
 	recover()
 	log.Printf("recovering")
 }
+func (dm *DirectoryMonitor) Close() {
 
-func setFolderWatcher(watchpath string) {
+	if dm.watchActive {
+		dm.watchdone <- 1
+		dm.watchwait.Wait()
+
+		dm.watcher.Remove(dm.lastwatchpath)
+		dm.watchActive = false
+		log.Println("closing watch on last: ", dm.lastwatchpath)
+	}
+}
+func (dm *DirectoryMonitor) setFolderWatcher(watchpath string) {
 	var err error
-	if fsw.activeproc {
+
+	if dm.activeproc {
 		return
 	}
 
-	if fsw.watchActive {
+	if dm.watchActive {
 		log.Printf("setFolderWatcher entering...")
 
-		if (fsw.lastwatchpath == watchpath) || (watchpath == "") {
+		if (dm.lastwatchpath == watchpath) || (watchpath == "") {
 			log.Printf("skip watch, same path")
 			return
 		}
 
-		log.Println("attempting to close watch on last: ", fsw.lastwatchpath, fsw.activeproc)
+		log.Println("attempting to close watch on last: ", dm.lastwatchpath, dm.activeproc)
 
-		//if fsw.watchdone != nil {
-		//		if fsw.activeproc {
-		//			defer dorecover()
-		//			close(fsw.watchdone)
-		//		}
-		fsw.watchwait.Wait()
+		dm.watchwait.Wait()
 
-		err = fsw.watcher.Remove(fsw.lastwatchpath)
-		fsw.watchActive = false
-		log.Println("closing watch on last: ", fsw.lastwatchpath)
+		err = dm.watcher.Remove(dm.lastwatchpath)
+		dm.watchActive = false
+		log.Println("closing watch on last: ", dm.lastwatchpath)
 	}
 
 	if watchpath == "" {
-		fsw.watchActive = false
-		fsw.lastwatchpath = watchpath
+		dm.watchActive = false
+		dm.lastwatchpath = watchpath
 		log.Printf("skip watch, empty path")
 		return
 	}
 
-	if fsw.watcher == nil {
-		fsw.watcher, err = fsnotify.NewWatcher()
+	if dm.watcher == nil {
+		dm.watcher, err = fsnotify.NewWatcher()
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
-	fsw.watchevents = 0
+	dm.watchevents = 0
 	go func() {
 		for {
 			select {
-			case event := <-fsw.watcher.Events:
+			case event := <-dm.watcher.Events:
 				hasEvent := false
 				evType := ""
 				if event.Op&fsnotify.Write == fsnotify.Write {
@@ -386,25 +436,25 @@ func setFolderWatcher(watchpath string) {
 				}
 
 				if hasEvent {
-					fsw.watchevents += 1
+					dm.watchevents += 1
 					log.Println(evType+": ", event.Name)
 
-					if watchmap == nil {
-						watchmap = make(ItmMap)
+					if dm.watchmap == nil {
+						dm.watchmap = make(ItmMap)
 					}
 
-					watchmap[event.Name] = &FileInfo{Name: event.Name, LastState: evType}
+					dm.watchmap[event.Name] = &FileInfo{Name: event.Name, LastState: evType}
 
-					if !fsw.activeproc {
-						fsw.activeproc = true
-						fsw.watchwait.Add(1)
-						fsw.watchdone = make(chan int, 1)
+					if !dm.activeproc {
+						dm.activeproc = true
+						dm.watchwait.Add(1)
+						dm.watchdone = make(chan int, 1)
 
-						go processWatcher(&fsw)
+						go dm.processWatcher()
 					}
 				}
 
-			case err := <-fsw.watcher.Errors:
+			case err := <-dm.watcher.Errors:
 				if err != nil {
 					log.Println("error:", err)
 				}
@@ -412,13 +462,13 @@ func setFolderWatcher(watchpath string) {
 		}
 	}()
 
-	err = fsw.watcher.Add(watchpath)
-	fsw.lastwatchpath = watchpath
+	err = dm.watcher.Add(watchpath)
+	dm.lastwatchpath = watchpath
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fsw.watchActive = true
+	dm.watchActive = true
 	log.Printf("starting watch on " + watchpath)
 }
 
@@ -426,31 +476,9 @@ func shouldExclude(name string) bool {
 	switch name {
 	case "System Volume Information", "pagefile.sys", "swapfile.sys":
 		return true
+		//	case "$RECYCLE.BIN":
+		//		return true
 	}
 
 	return false
-}
-
-func OnTableSelectedIndexesChanged() {
-	//fmt.Printf("SelectedIndexes: %v\n", tableView.SelectedIndexes())
-}
-
-func OnTableCurrentIndexChanged() {
-	var url string
-	if index := tableView.CurrentIndex(); index > -1 {
-		name := tableModel.items[index].Name
-
-		dir := tableModel.dirPath
-		url = filepath.Join(dir, name)
-
-		//		switch filepath.Ext(name) {
-		//		case
-		//			".jpg", ".jpeg":
-		//RenderImage(url)
-		//		}
-
-		//Mw.paintWidget.Invalidate()
-
-	}
-	Mw.MainWindow.SetTitle(url)
 }

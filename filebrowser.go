@@ -5,15 +5,14 @@
 package main
 
 import (
-	//	"fmt"
 	"image"
-	"image/draw"
+	//"image/draw"
 	"log"
-	//"unsafe"
-	//"runtime"
-	//"math"
+	"os"
+	"path/filepath"
+	//"reflect"
 	"strconv"
-	//"time"
+	"time"
 )
 
 import (
@@ -31,118 +30,418 @@ var treeModel *DirectoryTreeModel
 var tableView *walk.TableView
 var tableModel *FileInfoModel
 var addrList []string
+var settings *walk.IniFileSettings
 
-type viewRecord struct {
-	SelectedName string
-	SortMode     bool
+//type viewRecord struct {
+//	SelectedName string
+//	SortMode     bool
+//}
+//type mapSelection map[string]viewRecord
+
+//type CustomSplitter struct {
+//	*walk.Splitter
+//}
+
+//func (s *CustomSplitter) SetWidgetWidth(widget walk.Widget, newVal int) (err error) {
+
+//	if !s.Splitter.Children().Contains(widget) {
+//		return
+//	}
+
+//	handleIndex := 1 //s.children.Index(dragHandle)
+//	hndl := s.Splitter.Children().At(handleIndex)
+//	prev := s.Splitter.Children().At(handleIndex - 1)
+//	next := s.Splitter.Children().At(handleIndex + 1)
+
+//	prev.SetSuspended(true)
+//	defer prev.Invalidate()
+//	defer prev.SetSuspended(false)
+//	next.SetSuspended(true)
+//	defer next.Invalidate()
+//	defer next.SetSuspended(false)
+//	diff := 0
+
+//	if s.Orientation() == walk.Horizontal {
+//		if prev == widget {
+//			diff = prev.Width() - newVal
+//		} else {
+//			diff = next.Width() - newVal
+//		}
+//		hndl.SetX(hndl.X() + diff)
+//	} else {
+//		if prev == widget {
+//			diff = prev.Height() - newVal
+//		} else {
+//			diff = next.Height() - newVal
+//		}
+//		hndl.SetY(hndl.Y() + diff)
+//	}
+
+//	bh := hndl.Bounds()
+//	bp := prev.Bounds()
+//	bn := next.Bounds()
+
+//	var sizePrev int
+//	var sizeNext int
+
+//	if s.Orientation() == walk.Horizontal {
+//		bp.Width = bh.X - bp.X
+//		bn.Width -= (bh.X + bh.Width) - bn.X
+//		bn.X = bh.X + bh.Width
+//		sizePrev = bp.Width
+//		sizeNext = bn.Width
+//	} else {
+//		bp.Height = bh.Y - bp.Y
+//		bn.Height -= (bh.Y + bh.Height) - bn.Y
+//		bn.Y = bh.Y + bh.Height
+//		sizePrev = bp.Height
+//		sizeNext = bn.Height
+//	}
+
+//	if e := prev.SetBounds(bp); e != nil {
+//		return
+//	}
+
+//	if e := next.SetBounds(bn); e != nil {
+//		return
+//	}
+
+//	layout := s.Splitter.Layout().(*walk.MysplitterLayout)
+//	layout.hwnd2Item[prev.Handle()].size = sizePrev
+//	layout.hwnd2Item[next.Handle()].size = sizeNext
+
+//	return nil
+//}
+type tviews struct {
+	id      win.HWND
+	viewer  *ScrollViewer
+	handler *walk.Action
 }
-type mapSelection map[string]viewRecord
 
 type MyMainWindow struct {
 	*walk.MainWindow
-	toolbar         *walk.CustomWidget
-	hSplit          *walk.Composite //Splitter
-	thumbView       *ScrollViewer
-	pgBar           *walk.ProgressBar
-	vspacebar       *walk.Slider
+	toolbar    *walk.CustomWidget
+	hSplitter  *walk.Splitter
+	viewBase   *walk.Composite
+	thumbView  *ScrollViewer
+	thumbViews []tviews
+	//thumbView2      *ScrollViewer
 	btn1            *walk.PushButton
 	paintWidgetMenu *walk.Menu
 	topComposite    *walk.Composite
 	lblAddr         *walk.Label
-	lblSize         *walk.Label
 	cmbAddr         *walk.ComboBox
-	sldrSize        *walk.Slider
-	cbCached        *walk.CheckBox
+	btnOptions      *walk.PushButton
 	menuItemAction  *walk.Menu
+	treeMenu        *walk.Menu
+	menuView        *walk.Menu
+	ViewSlider      *walk.Slider
+	prevFilePath    string
+	menuKeepLoc     *walk.Action
+	menuTest1       *walk.Action
+	menuTest2       *walk.Action
+	menuTest3       *walk.Action
+	menuView1       *walk.Action
+	menuView2       *walk.Action
+	menuView3       *walk.Action
 }
 
-func NewDirectory(name string, parent *Directory) *Directory {
-	return &Directory{name: name, parent: parent}
+var testrun1 = false
+var stoptest = false
+
+func (mw *MyMainWindow) onTest1() {
+	//perform automated scrolling ops
+	//testing the rendering speed and
+	//efficiency
+	if !testrun1 {
+		go func() {
+			testrun1 = true
+			t := time.Now()
+			sc := mw.thumbView.scroller
+			for i := 0; i < sc.MaxValue(); i += 5 {
+				sc.SetValue(i)
+				if stoptest {
+					stoptest = false
+					break
+				}
+				time.Sleep(time.Millisecond * 1)
+			}
+			testrun1 = false
+			log.Println("scrolltest done in ", time.Since(t).Seconds())
+		}()
+	} else {
+		stoptest = true
+	}
 }
 
-func (mw *MyMainWindow) OnBtn1Click() {
+func (mw *MyMainWindow) onTest2() {
+	//create simple test images
 
-}
+	dlg := new(walk.FileDialog)
 
-func (mw *MyMainWindow) OnToolbarClick(x, y int, button walk.MouseButton) {
+	if mw.menuKeepLoc.Checked() {
+		dlg.InitialDirPath = mw.prevFilePath
+	}
+	dlg.Title = "Select a Location to create test image files to"
 
-	tableView.SetVisible(!tableView.Visible())
-
-	tableView.Parent().SendMessage(win.WM_SIZE, 0, 0)
-
-	if !tableView.Visible() {
-		//		tableView.SetMinMaxSize(walk.Size{0, 0}, walk.Size{10, 10})
-		//		tableView.SetBounds(walk.Rectangle{0, 0, 10, 10})
-		//tableView.SetParent(Mw)
-		//mw.Children().Add(tableView)
+	if ok, err := dlg.ShowBrowseFolder(Mw.MainWindow); err != nil {
+		return
+	} else if !ok {
+		return
+	}
+	if num, ok := DrawTestImage(dlg.FilePath); ok {
+		walk.MsgBox(mw, "Create test image files", "Created "+strconv.Itoa(num)+" test image files",
+			walk.MsgBoxOK|walk.MsgBoxIconInformation)
 	}
 
+	mw.prevFilePath = dlg.FilePath
 }
+func (mw *MyMainWindow) onTest3() {
+	//dump in-memory thumbnail data as jpeg files
 
-func (mw *MyMainWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
-	//log.Println("click: ", x, y)
-	w := thumbR.twm()
-	h := thumbR.thm()
+	dlg := new(walk.FileDialog)
 
-	col := int(float32(x) / float32(w))
-	row := int(float32(y) / float32(h))
+	if mw.menuKeepLoc.Checked() {
+		dlg.InitialDirPath = mw.prevFilePath
+	}
+	dlg.Title = "Select a Location to dump cache image files to"
 
-	x1 := col * w
-	y1 := row * h
-
-	idx := col + row*Mw.thumbView.NumCols()
-
-	if (idx >= 0) && (idx < len(tableModel.items)) {
-		tableView.SetSelectedIndexes([]int{idx})
-
-		//popup the ctx menu, depending on the mouse x,y in the
-		//image area.
-		if button == walk.RightButton {
-			bounds := image.Rect(x1, y1+h-thumbR.txth, x1+w, y1+h)
-			pt := image.Point{x, y}
-			if pt.In(bounds) {
-				Mw.thumbView.SetContextMenu(Mw.menuItemAction)
-			} else {
-				Mw.thumbView.SetContextMenu(nil)
-			}
+	if ok, err := dlg.ShowBrowseFolder(Mw.MainWindow); err != nil {
+		return
+	} else if !ok {
+		return
+	}
+	for _, v := range mw.thumbView.itemsModel.items {
+		if f, err := os.Create(filepath.Join(dlg.FilePath, "test-"+v.Name+".jpg")); err == nil {
+			f.Write(v.Imagedata)
+			f.Close()
 		} else {
-			Mw.thumbView.Invalidate()
+			return
+		}
+	}
+	walk.MsgBox(mw, "Dump cache image files", "Dump cache image files successful",
+		walk.MsgBoxOK|walk.MsgBoxIconInformation)
+
+	mw.prevFilePath = dlg.FilePath
+}
+func (mw *MyMainWindow) onMenuActionExplore() {
+	if treeItemPath != "" {
+		NewThumbViewWindow(mw.MainWindow, treeItemPath)
+	}
+}
+func (mw *MyMainWindow) onMenuActionReload() {
+
+	mw.thumbView.itemsModel.SetDirPath(mw.thumbView.itemsModel.dirPath, true)
+}
+func (mw *MyMainWindow) onMenuActionPreview() {
+	//do not continue if there is
+	//already a preview on screen
+	sv := mw.thumbView
+	if sv.PreviewRect != nil {
+		return
+	}
+	//Display image preview
+	sv.ShowPreview()
+}
+func (mw *MyMainWindow) onMenuActionDelete() {
+	fdelete := mw.thumbView.SelectedName()
+
+	if fdelete != "" {
+		if walk.MsgBox(mw, "Delete File", "Delete file "+fdelete,
+			walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == win.IDYES {
+			if err := os.Remove(mw.thumbView.SelectedNameFull()); err == nil {
+				mw.thumbView.SelectedIndex = -1
+			}
 		}
 	}
 }
 
-var dummyimg draw.Image
+func (mw *MyMainWindow) onMenuActionRename() {
 
-func (mw *MyMainWindow) onDrawPanelPaint(canvas *walk.Canvas, updateBounds walk.Rectangle) error {
-	RedrawScreen(canvas, updateBounds, mw.thumbView.Bounds())
-	return nil
+}
+
+func (mw *MyMainWindow) onMenuActionCopyTo() {
+
+	dlg := new(walk.FileDialog)
+
+	if mw.menuKeepLoc.Checked() {
+		dlg.InitialDirPath = mw.prevFilePath
+	}
+	dlg.Title = "Select a Location to copy files to"
+
+	if ok, err := dlg.ShowBrowseFolder(Mw.MainWindow); err != nil {
+		return
+	} else if !ok {
+		return
+	}
+	mw.prevFilePath = dlg.FilePath
+}
+func (mw *MyMainWindow) onMenuActionMoveTo() {
+	dlg := new(walk.FileDialog)
+
+	if mw.menuKeepLoc.Checked() {
+		dlg.InitialDirPath = mw.prevFilePath
+	}
+	dlg.Title = "Select a Location to move files to"
+
+	if ok, err := dlg.ShowBrowseFolder(Mw.MainWindow); err != nil {
+		return
+	} else if !ok {
+		return
+	}
+	mw.prevFilePath = dlg.FilePath
+}
+
+func (mw *MyMainWindow) onMenuActionKeepLoc() {
+	mw.menuKeepLoc.SetChecked(!mw.menuKeepLoc.Checked())
+
+	if !mw.menuKeepLoc.Checked() {
+		mw.prevFilePath = ""
+	}
+}
+func (mw *MyMainWindow) onMenuView1() {
+	mw.onMenuView3a()
+	mw.menuView1.SetChecked(!mw.menuView1.Checked())
+}
+func (mw *MyMainWindow) onMenuView2() {
+
+	//mw.hSplitter.SetSplitterPos(20)
+	//mw.hSplitter.SetWidgetWidth(mw.viewBase, 800)
+
+	switch {
+	case tableView.Visible():
+		w := tableView.Width()
+		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
+		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, false)
+		if tableView.Parent().(*walk.Splitter).Width()-w > 200 {
+			mw.hSplitter.SetWidgetWidth(mw.viewBase, mw.viewBase.Width()+w)
+		}
+	case !tableView.Visible():
+		w := tableView.Parent().(*walk.Splitter).Width()
+		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, true)
+		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
+	}
+
+	mw.menuView2.SetChecked(!mw.menuView2.Checked())
+	//initBuffer = false
+	//mw.thumbView.Invalidate()
+
+	//	if bmpCntr != nil {
+	//		SaveWalkBitmap(bmpCntr, "./bkp/bmpCntr.png")
+	//	}
+}
+func (mw *MyMainWindow) onMenuView3() {
+
+	if len(mw.thumbViews) == 2 { //allow only 3
+		return
+	}
+	tvw, _ := NewScrollViewer(Mw.MainWindow, Mw.viewBase, nil, 0, 0, 0)
+
+	tvw.SetImageProcessorStatusFunc(Mw.imageProcessStatusHandler)
+	tvw.SetImageProcessorInfoFunc(Mw.imageProcessInfoHandler)
+	tvw.SetDirectoryMonitorInfoFunc(Mw.directoryMonitorInfoHandler)
+	tvw.SetProcessStatuswidget(Mw.StatusBar())
+	tvw.SetEventMouseDown(Mw.onThumbViewMouseDn)
+
+	tvw.SetItemSize(Mw.thumbView.itemSize.tw, Mw.thumbView.itemSize.th)
+	tvw.SetLayoutMode(Mw.thumbView.GetLayoutMode())
+	tvw.SetCacheMode(true)
+	tvw.Run(tableModel.dirPath, nil, false)
+
+	mw.thumbViews = append(mw.thumbViews, tviews{id: tvw.ID, viewer: tvw, handler: nil})
+
+}
+func (mw *MyMainWindow) onMenuView3a() {
+
+	for _, v := range mw.thumbViews {
+		if v.viewer.scroller.Focused() {
+			v.viewer.destroy()
+			mw.viewBase.SendMessage(win.WM_SIZE, 0, 0)
+			break
+		}
+	}
+}
+
+var treeItemPath string
+
+func (mw *MyMainWindow) OnTreeMouseDown(x, y int, button walk.MouseButton) {
+	if button == walk.RightButton {
+		if item := treeView.ItemAt(x, y); item != nil {
+			treeItemPath = item.(*Directory).Path()
+			treeView.SetContextMenu(mw.treeMenu)
+		} else {
+			treeView.SetContextMenu(nil)
+			treeItemPath = ""
+		}
+		mnu := mw.treeMenu.Actions().At(0)
+		mnu.SetText("&Explore " + treeItemPath)
+	}
+}
+func (mw *MyMainWindow) onThumbViewMouseDn(x, y int, button walk.MouseButton) {
+	var idx int
+	var bounds image.Rectangle
+
+	if mw.thumbView.GetLayoutMode() != 5 {
+		idx = mw.thumbView.GetItemAtScreen(x, y)
+
+		w := mw.thumbView.itemSize.twm()
+		h := mw.thumbView.itemSize.thm()
+
+		col := int(float32(x) / float32(w))
+		row := int(float32(y+mw.thumbView.viewInfo.topPos) / float32(h))
+		x1 := col * w
+		y1 := row * h
+		bounds = image.Rect(x1, y1+h-mw.thumbView.itemSize.txth, x1+w, y1+h)
+	} else {
+		idx = mw.thumbView.GetItemAtScreenNB2(x, y)
+
+		b := mw.thumbView.GetItemRectAtScreenNB2(x, y)
+		if b != nil {
+			bounds = *b
+			bounds.Min.Y = bounds.Max.Y - 32
+		}
+	}
+
+	mw.StatusBar().Items().At(2).SetText("  " + mw.thumbView.GetItemName(idx) + "   " + mw.thumbView.GetItemInfo(idx))
+
+	if mw.thumbView.isValidIndex(idx) {
+
+		//popup the ctx menu, depending on the mouse x,y in the
+		//image area.
+		if button == walk.RightButton {
+			pt := image.Point{x, y + mw.thumbView.viewInfo.topPos}
+			if pt.In(bounds) {
+				mw.thumbView.SuspendPreview = true
+				mw.thumbView.SetContextMenu(Mw.menuItemAction)
+			} else {
+				mw.thumbView.SuspendPreview = false
+				mw.thumbView.SetContextMenu(nil)
+			}
+		}
+	}
 }
 
 func (mw *MyMainWindow) onTableColClick(n int) {
 	mw.thumbView.Invalidate()
 }
+func (mw *MyMainWindow) OnTableSelectedIndexesChanged() {
+	//fmt.Printf("SelectedIndexes: %v\n", tableView.SelectedIndexes())
+}
+func (mw *MyMainWindow) OnTableCurrentIndexChanged() {
+	var url string
+	if index := tableView.CurrentIndex(); index > -1 {
+		name := tableModel.items[index].Name
 
+		dir := tableModel.dirPath
+		url = filepath.Join(dir, name)
+	}
+	Mw.MainWindow.SetTitle(url)
+}
 func (mw *MyMainWindow) onToolbarSizeChanged() {
-	if mw.lblAddr != nil {
-		//mw.sldrSize.SetY(12)
+	if mw.btnOptions != nil {
+		mw.btnOptions.SetBounds(walk.Rectangle{mw.topComposite.Bounds().Width - 42, 7, 40, 28})
 	}
 }
-
-func (mw *MyMainWindow) OnToolbarCheckCache() {
-	doCache = mw.cbCached.Checked()
-}
-
-func (mw *MyMainWindow) OnToolbarCacheSize() {
-	thumbR.tw = mw.sldrSize.Value()
-	thumbR.th = int(float64(thumbR.tw) * float64(10) / float64(16))
-
-	//mw.SetupPaintAreaSize(len(tableModel.items), false, true)
-	mw.lblSize.SetText("Thumbsize: " + strconv.Itoa(thumbR.tw) + "x" + strconv.Itoa(thumbR.th))
-
-	mw.thumbView.SetItemSize(thumbR.twm(), thumbR.thm())
-	mw.thumbView.SetFocus()
-}
-
 func (mw *MyMainWindow) UpdateAddreebar(spath string) {
 	f := false
 	for i, adr := range addrList {
@@ -161,23 +460,30 @@ func (mw *MyMainWindow) UpdateAddreebar(spath string) {
 	Mw.cmbAddr.SetText(spath)
 }
 
+func addMenuActions(wmenu *walk.Menu, text string, onTriggered walk.EventHandler,
+	isSeparator, canCheck, isChecked bool) *walk.Action {
+	var itm *walk.Action
+	if !isSeparator {
+		itm = walk.NewAction()
+		itm.SetText(text)
+		itm.SetCheckable(canCheck)
+		itm.SetChecked(isChecked)
+		itm.Triggered().Attach(onTriggered)
+	} else {
+		itm = walk.NewSeparatorAction()
+	}
+	wmenu.Actions().Add(itm)
+	return itm
+}
+
 func main() {
-	//runtime.GOMAXPROCS(runtime.NumCPU() * 1)
-	//log.Println("cpu: ", runtime.NumCPU())
 	var err error
+
 	treeModel, err = NewDirectoryTreeModel()
 	if err != nil {
 		log.Fatal(err)
 	}
 	tableModel = NewFileInfoModel()
-
-	//initialize cache database
-	CreateCacheDB("")
-	defer CloseCacheDB()
-
-	myFont := *new(Font)
-	//myFont.Family = "Arial"
-	myFont.PointSize = 9
 
 	// These specify the app data sub directory for the settings file.
 	app := walk.App()
@@ -185,22 +491,98 @@ func main() {
 	app.SetProductName("GoImageBrowser")
 
 	// Settings file name.
-	settings := walk.NewIniFileSettings("settings.ini")
+	settings = walk.NewIniFileSettings("settings.ini")
 	if err := settings.Load(); err != nil {
 		log.Fatal(err)
 	}
+
 	//apply settings to window
 	app.SetSettings(settings)
 
-	//cwv := new(CustomWidgetView)
+	myFont := *new(Font)
+	myFont.PointSize = 10
 
 	if err := (MainWindow{
 		AssignTo: &Mw.MainWindow,
 		Name:     "mainBrowserWindow",
 		Title:    "Walk Image Browser",
 		MinSize:  Size{600, 400},
-		Size:     Size{1024, 550},
-		Layout:   VBox{Margins: Margins{Top: 0}, MarginsZero: true},
+		Size:     Size{1200, 600},
+		Layout:   VBox{Margins: Margins{Top: 0, Left: 4, Right: 2, Bottom: 0}, MarginsZero: false},
+		MenuItems: []MenuItem{
+			Menu{
+				Text: "&File",
+				Items: []MenuItem{
+					Action{
+						Text:        "&Reload",
+						OnTriggered: Mw.onMenuActionReload,
+					},
+					Menu{
+						//AssignTo: &recentMenu,
+						Text: "Recent",
+					},
+					Separator{},
+					Action{
+						Text:        "E&xit",
+						OnTriggered: func() { Mw.Close() },
+					},
+				},
+			},
+			Menu{
+				Text: "&Tools",
+				Items: []MenuItem{
+					Action{
+						AssignTo:    &Mw.menuTest1,
+						Text:        "Scroll test",
+						OnTriggered: Mw.onTest1,
+					},
+					Action{
+						AssignTo:    &Mw.menuTest2,
+						Text:        "Create test image files...",
+						OnTriggered: Mw.onTest2,
+					},
+					Action{
+						AssignTo:    &Mw.menuTest3,
+						Text:        "Dump in memory cache to disk...",
+						OnTriggered: Mw.onTest3,
+					},
+				},
+			},
+			Menu{
+				Text:     "&View",
+				AssignTo: &Mw.menuView,
+				Items: []MenuItem{
+					Action{
+						AssignTo:    &Mw.menuView1,
+						Text:        "Show Folder tree",
+						Checkable:   true,
+						OnTriggered: Mw.onMenuView1,
+					},
+					Action{
+						AssignTo:    &Mw.menuView2,
+						Text:        "Show File list",
+						Checkable:   true,
+						OnTriggered: Mw.onMenuView2,
+					},
+					Separator{},
+					Action{
+						AssignTo:    &Mw.menuView3,
+						Text:        "Add more Viewers",
+						Checkable:   true,
+						OnTriggered: Mw.onMenuView3,
+					},
+				},
+			},
+			Menu{
+				Text: "&Help",
+				Items: []MenuItem{
+					Action{
+						Text: "About",
+						//OnTriggered: mw.showAboutBoxAction_Triggered,
+					},
+				},
+			},
+		},
 		Children: []Widget{
 			//CustomWidget{
 			//				AssignTo:         &Mw.toolbar,
@@ -209,28 +591,46 @@ func main() {
 			//				//Paint:               Mw.onDrawPanel,
 			//				MaxSize:     Size{2, 48},
 			//				OnMouseDown: Mw.OnToolbarClick,
+
 			Composite{
-				Layout:        HBox{MarginsZero: false},
+				Layout:        Grid{Columns: 3},
 				AssignTo:      &Mw.topComposite,
-				MinSize:       Size{100, 32},
 				OnSizeChanged: Mw.onToolbarSizeChanged,
-				Children:      []Widget{},
+				Font:          myFont,
+				Children: []Widget{
+					Label{
+						AssignTo: &Mw.lblAddr,
+						Text:     "Address:",
+					},
+					ComboBox{
+						AssignTo:   &Mw.cmbAddr,
+						Editable:   true,
+						ColumnSpan: 1,
+					},
+					HSpacer{
+						Size: 40,
+					},
+				},
 			},
 			HSplitter{
+				Name:        "mainSplitter",
 				HandleWidth: 6,
+				AssignTo:    &Mw.hSplitter,
+
 				Children: []Widget{
 					HSplitter{
 						HandleWidth: 6,
+						Name:        "treetableSplitter",
 						Children: []Widget{
 							TreeView{
 								AssignTo:             &treeView,
 								Model:                treeModel,
 								OnCurrentItemChanged: OnTreeCurrentItemChanged,
+								OnMouseDown:          Mw.OnTreeMouseDown,
 								Font:                 myFont,
 							},
 							TableView{
 								AssignTo:              &tableView,
-								StretchFactor:         1,
 								AlternatingRowBGColor: walk.RGB(255, 255, 224),
 								CheckBoxes:            true,
 								ColumnsOrderable:      true,
@@ -270,108 +670,130 @@ func main() {
 									},
 								},
 								Model: tableModel,
-								OnCurrentIndexChanged:    OnTableCurrentIndexChanged,
-								OnSelectedIndexesChanged: OnTableSelectedIndexesChanged,
+								OnCurrentIndexChanged:    Mw.OnTableCurrentIndexChanged,
+								OnSelectedIndexesChanged: Mw.OnTableSelectedIndexesChanged,
 							},
 						},
 					},
 					Composite{
-						Layout:        HBox{MarginsZero: true},
+						Name:          "scrollviewComposite",
+						Layout:        VBox{MarginsZero: true},
 						StretchFactor: 2,
-						AssignTo:      &Mw.hSplit,
+						AssignTo:      &Mw.viewBase,
 					},
 				},
-			},
-			ProgressBar{
-				AssignTo: &Mw.pgBar,
-				Value:    0,
 			},
 		},
 	}.Create()); err != nil {
 		log.Fatal(err)
 	}
-	//	if err := walk.InitWrapperWindow(cwv); err != nil {
-	//		log.Fatal(err)
-	//	}
 
-	Mw.StatusBar().SetVisible(true)
-	Mw.StatusBar().MouseUp().Attach(Mw.OnToolbarClick)
+	sbr := Mw.StatusBar()
+	sbr.SetVisible(true)
 
-	Mw.thumbView, _ = NewScrollViewer(Mw.hSplit, Mw.onDrawPanelPaint, 0, thumbR.twm(), thumbR.thm())
-	Mw.thumbView.SetMouseDown(Mw.onDrawPanelMouseDn)
-	Mw.thumbView.Show()
+	sbi := walk.NewStatusBarItem()
+	sbi.SetWidth(120)
+	sbr.Items().Add(sbi)
 
-	Mw.lblAddr, _ = walk.NewLabel(Mw.topComposite)
-	Mw.topComposite.Children().Add(Mw.lblAddr)
-	Mw.lblAddr.SetText("Address:")
+	sbi = walk.NewStatusBarItem()
+	sbi.SetWidth(100)
+	sbr.Items().Add(sbi)
 
-	Mw.cmbAddr, _ = walk.NewComboBox(Mw.topComposite)
-	Mw.topComposite.Children().Add(Mw.cmbAddr)
+	sbi = walk.NewStatusBarItem()
+	sbi.SetWidth(600)
+	sbr.Items().Add(sbi)
 
-	sp, _ := walk.NewHSpacerFixed(Mw.topComposite, 50)
-	Mw.topComposite.Children().Add(sp)
+	Mw.menuView1.SetChecked(true)
+	Mw.menuView2.SetChecked(true)
 
-	Mw.lblSize, _ = walk.NewLabel(Mw.topComposite)
-	Mw.lblSize.SetText("Thumbsize:")
-	Mw.topComposite.Children().Add(Mw.lblSize)
+	//-----------
+	//Thumbviewer
+	//-----------
+	Mw.thumbView, _ = NewScrollViewer(Mw.MainWindow, Mw.viewBase, nil, 0, 0, 0)
 
-	Mw.sldrSize, _ = walk.NewSlider(Mw.topComposite)
-	Mw.sldrSize.SetMinMaxSize(walk.Size{160, 26}, walk.Size{160, 26})
-	Mw.sldrSize.SetRange(120, 360)
-	Mw.sldrSize.ValueChanged().Attach(Mw.OnToolbarCacheSize)
-	Mw.topComposite.Children().Add(Mw.sldrSize)
+	Mw.thumbView.SetImageProcessorStatusFunc(Mw.imageProcessStatusHandler)
+	Mw.thumbView.SetImageProcessorInfoFunc(Mw.imageProcessInfoHandler)
+	Mw.thumbView.SetDirectoryMonitorInfoFunc(Mw.directoryMonitorInfoHandler)
+	Mw.thumbView.SetProcessStatuswidget(Mw.StatusBar())
+	Mw.thumbView.SetEventMouseDown(Mw.onThumbViewMouseDn)
 
-	sp2, _ := walk.NewHSpacerFixed(Mw.topComposite, 10)
-	Mw.topComposite.Children().Add(sp2)
+	tableModel.viewer = Mw.thumbView
 
-	Mw.cbCached, _ = walk.NewCheckBox(Mw.topComposite)
-	Mw.cbCached.SetText("Cached:")
-	Mw.cbCached.CheckedChanged().Attach(Mw.OnToolbarCheckCache)
-	Mw.topComposite.Children().Add(Mw.cbCached)
+	//initialize cache database
+	defer Mw.thumbView.CloseCacheDB()
+
+	Mw.btnOptions, _ = walk.NewPushButton(Mw.topComposite)
+	Mw.btnOptions.SetText("   ")
+	img, err := walk.NewImageFromFile("./image/menu.png")
+	Mw.btnOptions.SetImage(img)
+	Mw.btnOptions.SetImageAboveText(true)
+	//Mw.btnOptions.Clicked().Attach(Mw.thumbView.SetOptionMode)
+	Mw.onToolbarSizeChanged()
 
 	//context menus
 	menu, _ := walk.NewMenu()
+	addMenuActions(menu, "&Preview", Mw.onMenuActionPreview, false, false, false)
+	addMenuActions(menu, "", nil, true, false, false)
+	addMenuActions(menu, "&Delete", Mw.onMenuActionDelete, false, false, false)
+	addMenuActions(menu, "&Rename", Mw.onMenuActionRename, false, false, false)
+	addMenuActions(menu, "&Copy to...", Mw.onMenuActionCopyTo, false, false, false)
+	addMenuActions(menu, "&Move to...", Mw.onMenuActionMoveTo, false, false, false)
+	addMenuActions(menu, "", nil, true, false, false)
+	Mw.menuKeepLoc = addMenuActions(menu, "&Keep last location", Mw.onMenuActionKeepLoc, false, false, false)
 
-	itm := walk.NewMenuAction(menu)
-	itm.SetText("&Delete")
-	itm.Triggered().Attach(Mw.OnBtn1Click)
-	menu.Actions().Add(itm)
-
-	itm = walk.NewMenuAction(menu)
-	itm.SetText("&Rename")
-	itm.Triggered().Attach(Mw.OnBtn1Click)
-	menu.Actions().Add(itm)
-
-	itm = walk.NewMenuAction(menu)
-	itm.SetText("&Copy to...")
-	itm.Triggered().Attach(Mw.OnBtn1Click)
-	menu.Actions().Add(itm)
-
-	itm = walk.NewMenuAction(menu)
-	itm.SetText("&Move to...")
-	itm.Triggered().Attach(Mw.OnBtn1Click)
-	menu.Actions().Add(itm)
 	Mw.menuItemAction = menu
-
 	Mw.thumbView.SetContextMenu(menu)
 
+	//Treeview context menus
+	menu, _ = walk.NewMenu()
+	addMenuActions(menu, "&Explore", Mw.onMenuActionExplore, false, false, false)
+	addMenuActions(menu, "&Rename", nil, false, false, false)
+	addMenuActions(menu, "", nil, true, false, false)
+	addMenuActions(menu, "&Delete", nil, false, false, false)
+	addMenuActions(menu, "", nil, true, false, false)
+	addMenuActions(menu, "&Reload", Mw.onMenuActionReload, false, false, false)
+
+	Mw.treeMenu = menu
+
 	//apply settings
+	//	if s, ok := settings.Get("ThumbViewWidth"); ok {
+	//		w, _ := strconv.Atoi(s)
+	//		if w > 0 {
+	//			if w > 800 {
+	//				w = 400
+	//			}
+	//			Mw.hSplitter.SetWidgetWidth(Mw.viewBase, w)
+	//		}
+	//	}
 	if s, ok := settings.Get("Cached"); ok {
 		b, _ := strconv.ParseBool(s)
-		Mw.cbCached.SetChecked(b)
-		doCache = b
+		Mw.thumbView.SetCacheMode(b)
 	}
+	w, h := 120, 75
 	if s, ok := settings.Get("ThumbW"); ok {
-		thumbR.tw, _ = strconv.Atoi(s)
+		w, _ = strconv.Atoi(s)
+		if w < 120 {
+			w = 120
+		}
 	}
 	if s, ok := settings.Get("ThumbH"); ok {
-		thumbR.th, _ = strconv.Atoi(s)
+		h, _ = strconv.Atoi(s)
+		if h < 75 {
+			h = 75
+		}
 	}
+	Mw.thumbView.SetItemSize(w, h)
+
+	if s, ok := settings.Get("LayoutMode"); ok {
+		idx, _ := strconv.Atoi(s)
+
+		Mw.thumbView.SetLayoutMode(idx)
+	}
+
 	if s, ok := settings.Get("LastAddress"); ok {
 		LocatePath(s)
 	}
 
-	Mw.sldrSize.SetValue(thumbR.tw)
 	tableView.ColumnClicked().Attach(Mw.onTableColClick)
 
 	//experimental net server
@@ -384,13 +806,44 @@ func main() {
 
 	//on exit, save settings
 	settings.Put("LastAddress", tableModel.dirPath)
-	settings.Put("ThumbW", strconv.Itoa(thumbR.tw))
-	settings.Put("ThumbH", strconv.Itoa(thumbR.th))
-	settings.Put("Cached", strconv.FormatBool(doCache))
+	settings.Put("ThumbW", strconv.Itoa(Mw.thumbView.itemSize.tw))
+	settings.Put("ThumbH", strconv.Itoa(Mw.thumbView.itemSize.th))
+	settings.Put("Cached", strconv.FormatBool(Mw.thumbView.doCache))
+	settings.Put("ThumbViewWidth", strconv.Itoa(Mw.thumbView.viewInfo.parentWidth))
+	settings.Put("LayoutMode", strconv.Itoa(Mw.thumbView.GetLayoutMode()))
+	settings.Put(tableModel.dirPath, strconv.Itoa(Mw.thumbView.viewInfo.topPos))
+
+	//log.Println("LayoutMode", Mw.thumbView.GetLayoutMode())
 
 	if err := settings.Save(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func (mw *MyMainWindow) imageProcessStatusHandler(i int) {
+	if !mw.thumbView.doCache && i == mw.thumbView.NumCols() {
+		mw.Synchronize(func() {
+			mw.thumbView.Invalidate()
+		})
+	}
+}
+func (mw *MyMainWindow) imageProcessInfoHandler(numjob int, d float64) {
+	mw.Synchronize(func() {
+		mw.MainWindow.SetTitle(tableModel.dirPath + " (" + strconv.Itoa(numjob) + " files) in " + strconv.FormatFloat(d, 'f', 3, 64))
+
+		mw.StatusBar().Items().At(0).SetText("  " + strconv.Itoa(numjob) + " files")
+		mw.StatusBar().Items().At(1).SetText(strconv.FormatFloat(d, 'f', 3, 64) + " s")
+
+		AppGetDirSettings(mw.thumbView, tableModel.dirPath)
+	})
+}
+func (mw *MyMainWindow) directoryMonitorInfoHandler(path string) {
+	mw.Synchronize(func() {
+		tableModel.PublishRowsReset()
+		numItems := len(tableModel.items)
+
+		mw.MainWindow.SetTitle(path + " (" + strconv.Itoa(numItems) + " files)")
+	})
 }
 
 type CustomWidgetView struct {

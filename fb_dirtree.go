@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 import (
@@ -26,7 +27,10 @@ func (d DirSlice) Swap(i, j int) {
 	d[i], d[j] = d[j], d[i]
 }
 func (d DirSlice) Less(i, j int) bool {
-	return d[i].name < d[j].name
+	strings.ToLower(d[i].name)
+
+	//return d[i].name < d[j].name
+	return strings.ToLower(d[i].name) < strings.ToLower(d[j].name)
 }
 
 type DirectoryTreeModel struct {
@@ -73,31 +77,30 @@ func (d *Directory) ResetChildren() error {
 
 	dirPath := d.Path()
 
-	if err := filepath.Walk(d.Path(), func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			if info == nil {
-				return filepath.SkipDir
+	if err := filepath.Walk(d.Path(),
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				if info == nil {
+					return filepath.SkipDir
+				}
 			}
-		}
 
-		name := info.Name()
+			name := info.Name()
 
-		if !info.IsDir() || path == dirPath || shouldExclude(name) {
-			return nil
-		}
+			if !info.IsDir() || path == dirPath || shouldExclude(name) {
+				return nil
+			}
 
-		d.children = append(d.children, NewDirectory(name, d))
+			d.children = append(d.children, NewDirectory(name, d))
 
-		dc := d.children
-		sort.Sort(dc)
-		d.children = dc
-
-		log.Println("dir: ", name)
-
-		return filepath.SkipDir
-	}); err != nil {
+			return filepath.SkipDir
+		}); err != nil {
 		return err
 	}
+
+	dc := d.children
+	sort.Sort(dc)
+	d.children = dc
 
 	return nil
 }
@@ -113,6 +116,10 @@ func (d *Directory) Path() string {
 	}
 
 	return filepath.Join(elems...)
+}
+
+func NewDirectory(name string, parent *Directory) *Directory {
+	return &Directory{name: name, parent: parent}
 }
 
 func NewDirectoryTreeModel() (*DirectoryTreeModel, error) {
@@ -149,8 +156,12 @@ func (m *DirectoryTreeModel) RootAt(index int) walk.TreeItem {
 }
 
 func OnTreeCurrentItemChanged() {
+
 	dir := treeView.CurrentItem().(*Directory)
-	if err := tableModel.SetDirPath(dir.Path()); err != nil {
+
+	//log.Println("onActionExplore", dir.Path())
+
+	if err := tableModel.SetDirPath(dir.Path(), true); err != nil {
 		walk.MsgBox(
 			Mw.MainWindow,
 			"Error",
