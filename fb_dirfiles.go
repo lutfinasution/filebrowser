@@ -43,15 +43,14 @@ type FileInfoModel struct {
 	items     []*FileInfo
 }
 
-func (f FileInfoModel) getFullPath(idx int) string {
-	return filepath.Join(f.dirPath, f.items[idx].Name)
-}
-
 func NewFileInfoModel() *FileInfoModel {
 	m := new(FileInfoModel)
 	return m
 }
 
+func (f FileInfoModel) getFullPath(idx int) string {
+	return filepath.Join(f.dirPath, f.items[idx].Name)
+}
 func (m *FileInfoModel) Items() interface{} {
 	return m.items
 }

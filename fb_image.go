@@ -174,18 +174,17 @@ func getOptimalThumbSize(dstW, dstH, srcW, srcH int) (int, int) {
 
 func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *walk.Size) *image.RGBA {
 
-	v, ok := sv.ItemsMap[mkey]
-	if !ok {
-		return nil
-	}
-	//	if v.Changed {
-	//		log.Println("processImageData/want to process ", mkey, doCache, v.HasData(), v.Changed)
-	//	}
-	//Skip thumb creation if ItemsMap already has data.
-	//and cache=true
-	//and changed=false
-	if createthumb && sv.doCache && v.HasData() && !v.Changed {
-		return nil
+	if sv != nil {
+		v, ok := sv.ItemsMap[mkey]
+		if !ok {
+			return nil
+		}
+		//Skip thumb creation if ItemsMap already has data.
+		//and cache=true
+		//and changed=false
+		if createthumb && sv.doCache && v.HasData() && !v.Changed {
+			return nil
+		}
 	}
 	//log.Println("processImageData/processing: ", mkey)
 
@@ -196,9 +195,13 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 	}
 	defer file.Close()
 
-	//set desired scaled size
-	resW := sv.itemSize.tw
-	resH := sv.itemSize.th
+	var resW, resH int
+
+	if sv != nil {
+		//set desired scaled size
+		resW = sv.itemSize.tw
+		resH = sv.itemSize.th
+	}
 
 	if !createthumb {
 		resW = imgsize.Width
@@ -266,6 +269,7 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 	}
 
 	if createthumb {
+		v, _ := sv.ItemsMap[mkey]
 		//Encode the scaled image & save to cache map
 		jept := jpeg.EncoderOptions{Quality: 75, OptimizeCoding: false, DCTMethod: jpeg.DCTIFast}
 		buf := new(bytes.Buffer)
@@ -433,37 +437,6 @@ func GetImageInfo(name string) (walk.Size, error) {
 	return w, err
 }
 
-func renderScreenBufferA(sv *ScrollViewer, canvas *walk.Canvas, iStart int, iStop int, drawPosY int) (res int) {
-	w := sv.itemSize.twm()
-	h := sv.itemSize.thm()
-	imgBase := image.NewRGBA(image.Rect(0, 0, w, h))
-	k := 0
-	res = 0
-	for i := iStart; i < iStop; i++ {
-		if i >= 0 {
-			mkey := sv.itemsModel.getFullPath(i)
-			if v, ok := sv.ItemsMap[mkey]; ok {
-				buf := v.Imagedata
-
-				_, err := renderImageBuffer(sv, mkey, buf, imgBase, 0, 0, sv.SelectedIndex == i, true, true)
-				if err != nil {
-					log.Println("renderImageBuffer error decoding : ", mkey, len(buf))
-				}
-				info1 := fmt.Sprintf("%d x %d", v.Width, v.Height)
-				info2 := fmt.Sprintf("%d ", v.Size)
-				drawtext(sv, []string{v.Name, info1, info2}, imgBase, imgBase.Bounds())
-
-				col := i % sv.NumCols()
-				row := k / sv.NumCols()
-
-				drawImageRGBAToCanvas(sv, imgBase, canvas.HDC(), w*col, h*row+drawPosY, w, h)
-				res++
-			}
-		}
-		k++
-	}
-	return res
-}
 func createDrawDibsection(ws, hs int) (win.HBITMAP, unsafe.Pointer) {
 	var bi win.BITMAPV5HEADER
 
@@ -494,44 +467,7 @@ func createDrawDibsection(ws, hs int) (win.HBITMAP, unsafe.Pointer) {
 
 	return winDib, winDibPtr
 }
-func drawImageRGBAToCanvas2(im *image.RGBA, cvs *walk.Canvas, winDib win.HBITMAP, winDibPtr unsafe.Pointer, xs, ys, ws, hs int) error {
 
-	// Fill the image
-	bitmap_array := (*[1 << 30]byte)(winDibPtr)
-
-	y0 := 0
-	x0 := 0
-	y1 := im.Bounds().Max.Y
-	x1 := im.Bounds().Max.X
-
-	b := im.Pix
-	is := 0
-	i := 0
-	for y := y0; y < y1; y++ {
-		for x := x0; x < x1; x++ {
-			bitmap_array[i+3] = b[is+3]
-			bitmap_array[i+2] = b[is+0]
-			bitmap_array[i+1] = b[is+1]
-			bitmap_array[i+0] = b[is+2]
-			is += 4
-			i += 4
-		}
-		i += (1000 - x1) * 4
-	}
-
-	hdc := win.GetDC(0)
-	defer win.ReleaseDC(0, hdc)
-
-	winHDC := win.CreateCompatibleDC(hdc)
-	winHDC0 := win.HDC(win.SelectObject(winHDC, win.HGDIOBJ(winDib)))
-
-	win.BitBlt(cvs.HDC(), int32(xs), int32(ys), int32(ws), int32(hs), winHDC, 0, 0, win.SRCCOPY)
-
-	win.SelectObject(winHDC0, win.HGDIOBJ(winDib))
-	win.DeleteDC(winHDC)
-
-	return nil
-}
 func drawImageRGBAToCanvas(sv *ScrollViewer, im *image.RGBA, cvsHDC win.HDC, xs, ys, ws, hs int) error {
 	var bi win.BITMAPV5HEADER
 
@@ -568,10 +504,10 @@ func drawImageRGBAToCanvas(sv *ScrollViewer, im *image.RGBA, cvsHDC win.HDC, xs,
 	x1 := im.Bounds().Max.X
 	b := im.Pix
 	for i := 0; i < y1*x1*4; i += 4 {
-		bitmap_array[i+3] = b[i+3]
-		bitmap_array[i+2] = b[i+0]
-		bitmap_array[i+1] = b[i+1]
-		bitmap_array[i+0] = b[i+2]
+		bitmap_array[i+3] = b[i+3] // a
+		bitmap_array[i+2] = b[i+0] // r
+		bitmap_array[i+1] = b[i+1] // g
+		bitmap_array[i+0] = b[i+2] // b
 	}
 
 	sv.drawerMutex.Lock()
@@ -588,7 +524,62 @@ func drawImageRGBAToCanvas(sv *ScrollViewer, im *image.RGBA, cvsHDC win.HDC, xs,
 
 	return nil
 }
+func drawImageRGBAToDIB(sv *ScrollViewer, im *image.RGBA, dbf *drawBuffer, xs, ys, ws, hs int) bool {
+	//-------------------------------------
+	// this is a fastest drawing method
+	//-------------------------------------
+	if sv != nil {
+		sv.drawerMutex.Lock()
+	}
+	//
 
+	//destination:
+	dibptr := dbf.drawPtr
+	if dibptr == nil {
+		return false
+	}
+
+	dstW := dbf.size.Width
+	dstMax := dstW * dbf.size.Height * 4
+
+	dstX := xs * 4
+	dstY := ys * dstW * 4
+
+	//source:
+	y0 := 0
+	y1 := y0 + hs
+	x0 := 0
+	x1 := x0 + ws
+	is := 0
+
+	dibArray := (*[1 << 30]byte)(dibptr)
+	imgArray := im.Pix
+
+	//log.Println(xs, ys)
+
+	//one pass along the source height
+	for y := y0; y < y1; y++ {
+		//one pass along the source width
+		for x := x0; x < x1; x++ {
+			if dstY+dstX >= 0 && dstY+dstX < dstMax {
+				dibArray[dstY+dstX+3] = imgArray[is+3]
+				dibArray[dstY+dstX+2] = imgArray[is+0]
+				dibArray[dstY+dstX+1] = imgArray[is+1]
+				dibArray[dstY+dstX+0] = imgArray[is+2]
+			}
+			//next offset
+			is += 4
+			dstX += 4
+		}
+		//next dest offset
+		dstX += (dstW - ws) * 4
+	}
+
+	if sv != nil {
+		sv.drawerMutex.Unlock()
+	}
+	return true
+}
 func DrawPreview(sv *ScrollViewer, idx int) (rPreview *walk.Rectangle) {
 
 	rPreview = nil
@@ -651,6 +642,66 @@ func DrawPreview(sv *ScrollViewer, idx int) (rPreview *walk.Rectangle) {
 	return rPreview
 }
 
+func DrawImage(imgName string, dbf *drawBuffer, dstCanvas *walk.Canvas) bool {
+	//-----------------------------------------
+	// draw full size image for screen viewing
+	//-----------------------------------------
+	//	win.BitBlt(dstCanvas.HDC(), 0, 0, int32(dbf.size.Width), int32(dbf.size.Height),
+	//		dbf.drawHDC, 0, 0, win.SRCCOPY)
+	vi := &dbf.viewinfo
+
+	ws, hs := dbf.size.Width, dbf.size.Height
+	wv, hv := vi.viewRect.Dx(), vi.viewRect.Dy()
+
+	wd, hd := ws, hs
+
+	// apply zoom factor
+	if dbf.zoom != 0 {
+		wd = int(dbf.zoom * float64(wd))
+		hd = int(dbf.zoom * float64(hd))
+	} else {
+		wd, hd = getOptimalThumbSize(wv, hv, ws, hs)
+	}
+
+	// calculate dest x,y
+	var xd, yd int32
+
+	xd = int32((wv-wd)/2) + int32(math.Ceil(float64(vi.offsetX)*dbf.zoom))
+	yd = int32((hv-hd)/2) + int32(math.Ceil(float64(vi.offsetY)*dbf.zoom))
+
+	xd += int32(vi.mousemoveX)
+	yd += int32(vi.mousemoveY)
+
+	vi.currentPos = &walk.Point{int(xd), int(yd)}
+
+	//log.Println("DrawImage xd,yd,vi.lastposX,vi.zoom,vi.zoomlast:", xd, yd, vi.offsetX, vi.zoom, vi.zoomlast)
+
+	// clears background
+	if wd < wv || hd < hv {
+		sz := dbf.zoomSize()
+		if sz.Height < hv {
+			h := (hv - sz.Height) / 2
+			win.BitBlt(dstCanvas.HDC(), 0, 0, int32(wv), int32(h), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+			y := h + sz.Height
+			win.BitBlt(dstCanvas.HDC(), 0, int32(y), int32(wv), int32(h), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+		}
+		if sz.Width < wv {
+			w := (wv - sz.Width) / 2
+			win.BitBlt(dstCanvas.HDC(), 0, 0, int32(w), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+			x := w + sz.Width
+			win.BitBlt(dstCanvas.HDC(), int32(x), 0, int32(wv), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+		}
+
+		//win.BitBlt(dstCanvas.HDC(), 0, 0, int32(wv), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+	}
+	// draw
+	win.SetStretchBltMode(dstCanvas.HDC(), win.HALFTONE)
+	win.StretchBlt(dstCanvas.HDC(), xd, yd, int32(wd), int32(hd),
+		dbf.drawHDC, 0, 0, int32(ws), int32(hs), win.SRCCOPY)
+
+	return true
+}
+
 func abs(val int) int {
 	if val < 0 {
 		return -val
@@ -658,156 +709,157 @@ func abs(val int) int {
 		return val
 	}
 }
-func RedrawScreenSLB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
-	var cleaner = func(area walk.Rectangle, offsetX int, offsetY int) {
-		brush, _ := walk.NewSolidColorBrush(walk.RGB(0, 0, 0))
+//func RedrawScreenSLB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
-		if offsetX != 0 {
-			area.X = offsetX
-		}
-		if offsetY != 0 {
-			area.Y -= offsetY
-		}
-		canvas.FillRectangle(brush, area)
+//	var cleaner = func(area walk.Rectangle, offsetX int, offsetY int) {
+//		brush, _ := walk.NewSolidColorBrush(walk.RGB(0, 0, 0))
 
-		defer brush.Dispose()
-	}
+//		if offsetX != 0 {
+//			area.X = offsetX
+//		}
+//		if offsetY != 0 {
+//			area.Y -= offsetY
+//		}
+//		canvas.FillRectangle(brush, area)
 
-	//default drawing ops, clearing the canvas, when no content is available
-	if sv.itemsCount == 0 || sv.ItemsMap == nil {
-		cleaner(viewbounds, 0, 0)
-		return nil
-	}
-	t := time.Now()
+//		defer brush.Dispose()
+//	}
 
-	//local vars
-	icount := 0
-	w := sv.itemSize.twm()
-	h := sv.itemSize.thm()
-	vi := &sv.viewInfo
-	numcols := sv.NumCols()
-	numrows := sv.NumRowsVisible()
-	//topRow := vi.topPos / h
-	topRow := int(math.Ceil(float64(vi.topPos) / float64(h)))
-	iStart, iStop := 0, 0
-	drawY := abs(0)
-	offsetY := (vi.lastPos - vi.topPos)
-	//shiftSize := abs(offsetY) % h //h //* numcols-->could be any n, n < h
-	//	if shiftSize == 0 {
-	//		shiftSize = h
-	//	}
+//	//default drawing ops, clearing the canvas, when no content is available
+//	if sv.itemsCount == 0 || sv.ItemsMap == nil {
+//		cleaner(viewbounds, 0, 0)
+//		return nil
+//	}
+//	t := time.Now()
 
-	if numcols == 0 {
-		return nil
-	}
+//	//local vars
+//	icount := 0
+//	w := sv.itemSize.twm()
+//	h := sv.itemSize.thm()
+//	vi := &sv.viewInfo
+//	numcols := sv.NumCols()
+//	numrows := sv.NumRowsVisible()
+//	//topRow := vi.topPos / h
+//	topRow := int(math.Ceil(float64(vi.topPos) / float64(h)))
+//	iStart, iStop := 0, 0
+//	drawY := abs(0)
+//	offsetY := (vi.lastPos - vi.topPos)
+//	//shiftSize := abs(offsetY) % h //h //* numcols-->could be any n, n < h
+//	//	if shiftSize == 0 {
+//	//		shiftSize = h
+//	//	}
 
-	if !vi.initSLBuffer {
-		vi.initSLBuffer = true
+//	if numcols == 0 {
+//		return nil
+//	}
 
-		if sv.bmpCntr != nil {
-			sv.cvsCntr.Dispose()
-			sv.bmpCntr.Dispose()
-			sv.cvsCntr = nil
-			sv.bmpCntr = nil
+//	if !vi.initSLBuffer {
+//		vi.initSLBuffer = true
 
-		}
-		bm := image.NewRGBA(image.Rect(0, 0, w*numcols, (4+numrows)*h))
-		sv.bmpCntr, _ = walk.NewBitmapFromImage(bm)
-		sv.cvsCntr, _ = walk.NewCanvasFromImage(sv.bmpCntr)
+//		if sv.bmpCntr != nil {
+//			sv.cvsCntr.Dispose()
+//			sv.bmpCntr.Dispose()
+//			sv.cvsCntr = nil
+//			sv.bmpCntr = nil
 
-		iStart = (topRow - 2) * numcols
-		iStop = iStart + numcols*(4+numrows)
-		if iStop > sv.itemsCount {
-			iStop = sv.itemsCount
-		}
-		drawY = 0
-		icount = renderScreenBufferA(sv, sv.cvsCntr, iStart, iStop, drawY)
+//		}
+//		bm := image.NewRGBA(image.Rect(0, 0, w*numcols, (4+numrows)*h))
+//		sv.bmpCntr, _ = walk.NewBitmapFromImage(bm)
+//		sv.cvsCntr, _ = walk.NewCanvasFromImage(sv.bmpCntr)
 
-		//log.Println("initBuffer  topRow,iStart,iStop,numrows", topRow, iStart, iStop, numrows)
-		vi.lastPos = vi.topPos
-	}
+//		iStart = (topRow - 2) * numcols
+//		iStop = iStart + numcols*(4+numrows)
+//		if iStop > sv.itemsCount {
+//			iStop = sv.itemsCount
+//		}
+//		drawY = 0
+//		icount = renderScreenBufferA(sv, sv.cvsCntr, iStart, iStop, drawY)
 
-	switch {
-	case vi.lastPos == vi.topPos:
-	case vi.lastPos < vi.topPos: //scroll-down
-		//shift Center image buffer UP
-		win.BitBlt(sv.cvsCntr.HDC(), 0, int32(offsetY), int32(sv.bmpCntr.Size().Width), int32(sv.bmpCntr.Size().Height),
-			sv.cvsCntr.HDC(), 0, 0, win.SRCCOPY)
+//		//log.Println("initBuffer  topRow,iStart,iStop,numrows", topRow, iStart, iStop, numrows)
+//		vi.lastPos = vi.topPos
+//	}
 
-		//Fill the right buffer with data
-		iStart = (topRow + (numrows + 1)) * numcols
-		iStop = iStart + numcols
+//	switch {
+//	case vi.lastPos == vi.topPos:
+//	case vi.lastPos < vi.topPos: //scroll-down
+//		//shift Center image buffer UP
+//		win.BitBlt(sv.cvsCntr.HDC(), 0, int32(offsetY), int32(sv.bmpCntr.Size().Width), int32(sv.bmpCntr.Size().Height),
+//			sv.cvsCntr.HDC(), 0, 0, win.SRCCOPY)
 
-		if iStop > sv.itemsCount {
-			iStop = sv.itemsCount
-		}
-		//drawY = bmpCntr.Size().Height - h
+//		//Fill the right buffer with data
+//		iStart = (topRow + (numrows + 1)) * numcols
+//		iStop = iStart + numcols
 
-		if vi.topPos%h != 0 {
-			drawY = sv.bmpCntr.Size().Height - vi.topPos%(h)
-		} else {
-			drawY = sv.bmpCntr.Size().Height - h
-		}
+//		if iStop > sv.itemsCount {
+//			iStop = sv.itemsCount
+//		}
+//		//drawY = bmpCntr.Size().Height - h
 
-		//log.Println("scroll-down  vi.topPos,topRow,abs(offsetY)", vi.topPos, topRow, abs(offsetY))
+//		if vi.topPos%h != 0 {
+//			drawY = sv.bmpCntr.Size().Height - vi.topPos%(h)
+//		} else {
+//			drawY = sv.bmpCntr.Size().Height - h
+//		}
 
-		vi.lastMovePos += abs(offsetY)
-		if vi.lastMovePos >= h {
-			vi.lastMovePos = 0
-		}
+//		//log.Println("scroll-down  vi.topPos,topRow,abs(offsetY)", vi.topPos, topRow, abs(offsetY))
 
-	case vi.lastPos > vi.topPos && (vi.topPos >= 0): //scroll-up
-		//shift Center image buffer DOWN
-		win.BitBlt(sv.cvsCntr.HDC(), 0, int32(offsetY),
-			int32(sv.bmpCntr.Size().Width), int32(sv.bmpCntr.Size().Height),
-			sv.cvsCntr.HDC(), 0, 0, win.SRCCOPY)
+//		vi.lastMovePos += abs(offsetY)
+//		if vi.lastMovePos >= h {
+//			vi.lastMovePos = 0
+//		}
 
-		//Fill the left buffer with data
-		iStart = (topRow - 2) * numcols
-		iStop = iStart + numcols
+//	case vi.lastPos > vi.topPos && (vi.topPos >= 0): //scroll-up
+//		//shift Center image buffer DOWN
+//		win.BitBlt(sv.cvsCntr.HDC(), 0, int32(offsetY),
+//			int32(sv.bmpCntr.Size().Width), int32(sv.bmpCntr.Size().Height),
+//			sv.cvsCntr.HDC(), 0, 0, win.SRCCOPY)
 
-		if iStart < 0 {
-			iStart = 0
-		}
-		//drawY = 0
-		if vi.topPos%h != 0 {
-			drawY = -vi.topPos % (h)
-		} else {
-			drawY = 0
-		}
+//		//Fill the left buffer with data
+//		iStart = (topRow - 2) * numcols
+//		iStop = iStart + numcols
 
-		vi.lastMovePos += abs(offsetY)
-		if vi.lastMovePos >= h {
-			vi.lastMovePos = 0
-		}
-		log.Println("scroll-up  vi.topPos,topRow,abs(offsetY)", vi.topPos, topRow, abs(offsetY))
-		//log.Println("scroll-up  topRow,iStart,iStop,numrows", topRow, iStart, iStop, numrows)
-	}
+//		if iStart < 0 {
+//			iStart = 0
+//		}
+//		//drawY = 0
+//		if vi.topPos%h != 0 {
+//			drawY = -vi.topPos % (h)
+//		} else {
+//			drawY = 0
+//		}
 
-	//Blast to screen
-	win.BitBlt(canvas.HDC(), 0, 0, int32(w*numcols), int32(h*numrows),
-		sv.cvsCntr.HDC(), 0, int32(2*h), win.SRCCOPY)
+//		vi.lastMovePos += abs(offsetY)
+//		if vi.lastMovePos >= h {
+//			vi.lastMovePos = 0
+//		}
+//		log.Println("scroll-up  vi.topPos,topRow,abs(offsetY)", vi.topPos, topRow, abs(offsetY))
+//		//log.Println("scroll-up  topRow,iStart,iStop,numrows", topRow, iStart, iStop, numrows)
+//	}
 
-	//ReFill the buffer with data
-	if vi.lastPos != vi.topPos { //}&& vi.lastMovePos == 0 {
-		icount = renderScreenBufferA(sv, sv.cvsCntr, iStart, iStop, drawY)
-		log.Println("ReFilled the buffer with data  topRow,iStart,iStop,drawY", topRow, iStart, iStop, drawY)
-	}
+//	//Blast to screen
+//	win.BitBlt(canvas.HDC(), 0, 0, int32(w*numcols), int32(h*numrows),
+//		sv.cvsCntr.HDC(), 0, int32(2*h), win.SRCCOPY)
 
-	vi.lastPos = vi.topPos
+//	//ReFill the buffer with data
+//	if vi.lastPos != vi.topPos { //}&& vi.lastMovePos == 0 {
+//		icount = renderScreenBufferA(sv, sv.cvsCntr, iStart, iStop, drawY)
+//		log.Println("ReFilled the buffer with data  topRow,iStart,iStop,drawY", topRow, iStart, iStop, drawY)
+//	}
 
-	d := time.Since(t).Seconds()
-	drawStat.add(d)
-	log.Println("RedrawScreen rendering ", icount, "items in ",
-		fmt.Sprintf("%6.3f", d),
-		fmt.Sprintf("%6.3f", drawStat.avg()))
+//	vi.lastPos = vi.topPos
 
-	if sv.handleChangedItems {
-		defer sv.contentMonitor.processChangedItem(sv, false)
-	}
-	return nil
-}
+//	d := time.Since(t).Seconds()
+//	drawStat.add(d)
+//	log.Println("RedrawScreen rendering ", icount, "items in ",
+//		fmt.Sprintf("%6.3f", d),
+//		fmt.Sprintf("%6.3f", drawStat.avg()))
+
+//	if sv.handleChangedItems {
+//		defer sv.contentMonitor.processChangedItem(sv, false)
+//	}
+//	return nil
+//}
 
 type drawstats struct {
 	data []float64
@@ -836,7 +888,7 @@ func drawfuncNB(sv *ScrollViewer, path string, data *FileInfo) {
 	mkey := filepath.Join(path, data.Name)
 	buf := data.Imagedata
 
-	_, err := renderImageBuffer(sv, mkey, buf, imgBase, 0, 0, sv.SelectedIndex == data.index, true, true)
+	_, err := renderImageBuffer(sv, mkey, buf, imgBase, 0, 0, data.checked, true, true)
 	if err != nil {
 		log.Println("error decoding : ", mkey, len(buf))
 	}
@@ -852,8 +904,10 @@ func drawfuncNB(sv *ScrollViewer, path string, data *FileInfo) {
 	if sv.viewInfo.showInfo {
 		textout = append(textout, fmt.Sprintf("%d x %d", data.Width, data.Height)+"  "+fmt.Sprintf("%d KB", data.Size/1024))
 	}
-	drawtext(sv, textout, imgBase, imgBase.Bounds())
 
+	if len(textout) > 0 {
+		drawtext(sv, textout, imgBase, imgBase.Bounds())
+	}
 	//Draw to screen
 	cvs, _ := sv.canvasView.CreateCanvas()
 
@@ -914,7 +968,10 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 		return nil
 	}
 	workmap := make(ItmMap, len(sv.itemsModel.items))
-
+	//-------------------------------------------
+	// run this loop to record destination rects
+	// according to this draw layout
+	//-------------------------------------------
 	for i := range sv.itemsModel.items {
 		x := (i % numcols) * w
 		y := int(i/numcols) * h
@@ -936,7 +993,7 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 		}
 	}
 
-	//experimental drawing w/ goroutines
+	// drawing w/ goroutines
 	if sv.drawersChan == nil {
 		sv.drawersChan = make(chan *FileInfo)
 	}
@@ -1037,59 +1094,64 @@ func drawfuncNB2(sv *ScrollViewer, path string, data *FileInfo) {
 		log.Println("error decoding : ", mkey, len(buf), wd)
 	}
 
-	if sv.SelectedIndex == data.index {
+	//if sv.SelectedIndex == data.index {
+	if data.checked {
 		renderBorder(sv, img, 0, 0, wd, hs)
 	}
 
-	//Draw to screen
-	//cvs, _ := sv.canvasView.CreateCanvas()
-	//sv.drawerMutex.Lock()
-	cvs := sv.drawerHDC
+	//Draw to sv.drawerHDC
+	//	drawImageRGBAToCanvas(sv, img, sv.drawerHDC, data.drawRect.X, data.drawRect.Y,
+	//		data.drawRect.Width, data.drawRect.Height)
 
-	drawImageRGBAToCanvas(sv, img, cvs, data.drawRect.X, data.drawRect.Y,
-		data.drawRect.Width, data.drawRect.Height)
-	//sv.drawerMutex.Unlock()
-	//cvs.Dispose()
+	// this is the fastest draw method, manipulating the pixels of
+	// the draw buffer's dibsection directly.
+	// faster by 50% compared to drawImageRGBAToCanvas above
+	drawImageRGBAToDIB(sv, img, sv.drawerBuffer, data.drawRect.X, data.drawRect.Y, data.drawRect.Width, data.drawRect.Height)
 }
 
 func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
-	cleaner := func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
-		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+	//cleaner := func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
+	cleaner := func(hdc win.HDC, area walk.Rectangle, offsetX int, offsetY int) {
+		//		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
 
-		if offsetX != 0 {
-			area.X = offsetX
-		}
-		if offsetY != 0 {
-			area.Y -= offsetY
-		}
-		cvs.FillRectangle(brush, area)
+		//		if offsetX != 0 {
+		//			area.X = offsetX
+		//		}
+		//		if offsetY != 0 {
+		//			area.Y -= offsetY
+		//		}
+		//		cvs.FillRectangle(brush, area)
 
-		defer brush.Dispose()
+		//		defer brush.Dispose()
+		win.BitBlt(hdc, int32(area.X), int32(area.Y), int32(area.Width), int32(area.Height),
+			hdc, 0, 0, win.BLACKNESS)
+	}
+
+	numItems := len(sv.itemsModel.items)
+	if numItems == 0 {
+		return nil
+	}
+	t := time.Now()
+
+	if sv.drawerBuffer == nil {
+		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
+		sv.drawerHDC = sv.drawerBuffer.drawHDC
+	}
+	if sv.drawerBuffer.size.Width != sv.ViewWidth() || sv.drawerBuffer.size.Height != sv.ViewHeight() {
+		DeleteDrawBuffer(sv.drawerBuffer)
+
+		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
+		sv.drawerHDC = sv.drawerBuffer.drawHDC
 	}
 
 	//default drawing ops, clearing the canvas, when no content is available
 	if sv.itemsCount == 0 || sv.ItemsMap == nil {
-		cleaner(canvas, viewbounds, 0, 0)
+		//cleaner(canvas, viewbounds, 0, 0)
+		//cleaner(sv.drawerCanvas, viewbounds, 0, 0)
+		cleaner(sv.drawerHDC, viewbounds, 0, 0)
+		log.Println(sv.itemsCount, len(sv.itemsModel.items), len(sv.ItemsMap))
 		return nil
-	}
-
-	t := time.Now()
-
-	if sv.drawerBitmap == nil {
-		img := image.NewRGBA(image.Rect(0, 0, sv.ViewWidth(), sv.ViewHeight()))
-		sv.drawerBitmap, _ = walk.NewBitmapFromImage(img)
-		sv.drawerCanvas, _ = walk.NewCanvasFromImage(sv.drawerBitmap)
-		sv.drawerHDC = sv.drawerCanvas.HDC()
-	}
-	if sv.drawerBitmap.Size().Width != sv.ViewWidth() || sv.drawerBitmap.Size().Height != sv.ViewHeight() {
-		sv.drawerCanvas.Dispose()
-		sv.drawerBitmap.Dispose()
-
-		img := image.NewRGBA(image.Rect(0, 0, sv.ViewWidth(), sv.ViewHeight()))
-		sv.drawerBitmap, _ = walk.NewBitmapFromImage(img)
-		sv.drawerCanvas, _ = walk.NewCanvasFromImage(sv.drawerBitmap)
-		sv.drawerHDC = sv.drawerCanvas.HDC()
 	}
 
 	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
@@ -1103,15 +1165,11 @@ func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 	if abs(iscrollSize) > 2*h {
 		iscrollSize = 2 * h * iscrollSize / abs(iscrollSize)
 	}
-	//shift onscreen image according to scroll direction
+	//shift offscreen image according to scroll direction
 	if iscrollSize != 0 {
-		//		win.BitBlt(canvas.HDC(),
-		//			0, int32(iscrollSize), int32(sv.ViewWidth()), int32(sv.ViewHeight()-iscrollSize),
-		//			canvas.HDC(), 0, 0, win.SRCCOPY)
-
-		win.BitBlt(sv.drawerCanvas.HDC(),
+		win.BitBlt(sv.drawerHDC,
 			0, int32(iscrollSize), int32(sv.ViewWidth()), int32(sv.ViewHeight()-iscrollSize),
-			sv.drawerCanvas.HDC(), 0, 0, win.SRCCOPY)
+			sv.drawerHDC, 0, 0, win.SRCCOPY)
 
 	}
 	sv.viewInfo.lastPos = sv.viewInfo.topPos
@@ -1123,7 +1181,6 @@ func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 	x := 0
 	y := 0
 	wmax := sv.ViewWidth()
-	numItems := len(sv.itemsModel.items)
 
 	workmap := make(ItmMap, numItems)
 
@@ -1143,7 +1200,7 @@ func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 		}
 		rItm := image.Rect(x, y, x+wd, y+h)
 		//---------------------------------------------------------
-		//Only perform drawing ops on items within the Update rect
+		//Only record items within the Update rect
 		//---------------------------------------------------------
 		if rUpdate.Intersect(rItm) != image.ZR {
 			icount++
@@ -1175,8 +1232,8 @@ func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 	}
 	if !sv.drawersActive {
 		sv.drawersActive = true
-		sv.drawerFunc = drawfuncNB2
 		sv.drawersCount = 4
+		sv.drawerFunc = drawfuncNB2
 
 		for g := 0; g < sv.drawersCount; g++ {
 			//---------------------------------------------------
@@ -1196,12 +1253,13 @@ func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 		}
 	} else {
 		if fmt.Sprint(sv.drawerFunc) != fmt.Sprint(drawfuncNB2) {
-			log.Println("Different drawerfunc is in use. Switching draw func to drawfuncNB2")
 			sv.drawerFunc = drawfuncNB2
+			log.Println("Different drawerfunc is in use. Switching draw func to drawfuncNB2")
 		}
 	}
 
 	getNextItem := func() (res *FileInfo) {
+		res = nil
 		for k, v := range workmap {
 			res = v
 			delete(workmap, k)
@@ -1225,15 +1283,17 @@ loop:
 			break loop
 		}
 	}
-	//wait for all workitem to be processed
+	//wait for all workitems to be processed
 	sv.drawersWait.Wait()
 
-	win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerCanvas.HDC(), 0, 0, win.SRCCOPY)
+	//-----------------------------
+	// draw entire buffer to screen
+	//-----------------------------
+	win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerHDC, 0, 0, win.SRCCOPY)
 
 	d := time.Since(t).Seconds()
 	drawStat.add(d)
-
-	log.Println("RedrawScreen rendering ", icount, "items in ", fmt.Sprintf("%6.3f", d), fmt.Sprintf("%6.3f", drawStat.avg()))
+	//log.Println("RedrawScreen rendering ", icount, "items in ", fmt.Sprintf("%6.3f", d), fmt.Sprintf("%6.3f", drawStat.avg()))
 
 	if sv.handleChangedItems {
 		defer sv.contentMonitor.processChangedItem(sv, false)

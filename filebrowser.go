@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	//"reflect"
+	"fmt"
 	"strconv"
 	"time"
 )
@@ -141,9 +142,11 @@ type MyMainWindow struct {
 	menuTest1       *walk.Action
 	menuTest2       *walk.Action
 	menuTest3       *walk.Action
+	menuView0       *walk.Action
 	menuView1       *walk.Action
 	menuView2       *walk.Action
 	menuView3       *walk.Action
+	menuView4       *walk.Action
 }
 
 var testrun1 = false
@@ -158,16 +161,25 @@ func (mw *MyMainWindow) onTest1() {
 			testrun1 = true
 			t := time.Now()
 			sc := mw.thumbView.scroller
-			for i := 0; i < sc.MaxValue(); i += 5 {
+			h := mw.thumbView.itemHeight
+			c := 0
+			for i := 0; i < sc.MaxValue(); i += h / 4 {
+				//for i := 0; i < 2*h; i += 1 {
 				sc.SetValue(i)
+				c++
 				if stoptest {
 					stoptest = false
 					break
 				}
-				time.Sleep(time.Millisecond * 1)
+				if c%2*h == 0 {
+					time.Sleep(time.Millisecond * 1)
+				}
 			}
 			testrun1 = false
-			log.Println("scrolltest done in ", time.Since(t).Seconds())
+			d := time.Since(t).Seconds()
+			fps := float64(c) / d
+
+			mw.StatusBar().Items().At(2).SetText(fmt.Sprintf("scrolltest done in %6.3f sec. at %6.1f fps", d, fps))
 		}()
 	} else {
 		stoptest = true
@@ -234,14 +246,17 @@ func (mw *MyMainWindow) onMenuActionReload() {
 	mw.thumbView.itemsModel.SetDirPath(mw.thumbView.itemsModel.dirPath, true)
 }
 func (mw *MyMainWindow) onMenuActionPreview() {
+	//Display full image preview
+	mw.thumbView.ShowPreviewFull()
+}
+func (mw *MyMainWindow) onMenuActionPreview2() {
 	//do not continue if there is
 	//already a preview on screen
-	sv := mw.thumbView
-	if sv.PreviewRect != nil {
+	if mw.thumbView.PreviewRect != nil {
 		return
 	}
 	//Display image preview
-	sv.ShowPreview()
+	mw.thumbView.ShowPreview()
 }
 func (mw *MyMainWindow) onMenuActionDelete() {
 	fdelete := mw.thumbView.SelectedName()
@@ -299,9 +314,11 @@ func (mw *MyMainWindow) onMenuActionKeepLoc() {
 		mw.prevFilePath = ""
 	}
 }
+func (mw *MyMainWindow) onMenuView0() {
+	mw.thumbView.ShowPreviewFull()
+}
 func (mw *MyMainWindow) onMenuView1() {
-	mw.onMenuView3a()
-	mw.menuView1.SetChecked(!mw.menuView1.Checked())
+
 }
 func (mw *MyMainWindow) onMenuView2() {
 
@@ -331,8 +348,8 @@ func (mw *MyMainWindow) onMenuView2() {
 	//	}
 }
 func (mw *MyMainWindow) onMenuView3() {
-
-	if len(mw.thumbViews) == 2 { //allow only 3
+	// add a thumbviewer object
+	if len(mw.thumbViews) == 2 { //allow only 3 total
 		return
 	}
 	tvw, _ := NewScrollViewer(Mw.MainWindow, Mw.viewBase, nil, 0, 0, 0)
@@ -349,17 +366,24 @@ func (mw *MyMainWindow) onMenuView3() {
 	tvw.Run(tableModel.dirPath, nil, false)
 
 	mw.thumbViews = append(mw.thumbViews, tviews{id: tvw.ID, viewer: tvw, handler: nil})
+	mw.menuView4.SetEnabled(true)
 
 }
-func (mw *MyMainWindow) onMenuView3a() {
-
-	for _, v := range mw.thumbViews {
+func (mw *MyMainWindow) onMenuView4() {
+	// remove a thumbviewer object
+	for i, v := range mw.thumbViews {
 		if v.viewer.scroller.Focused() {
 			v.viewer.destroy()
+
 			mw.viewBase.SendMessage(win.WM_SIZE, 0, 0)
+
+			// resize the mw.thumbViews slice, removing element i
+			mw.thumbViews = append(mw.thumbViews[:i], mw.thumbViews[i+1:]...)
 			break
 		}
 	}
+
+	mw.menuView4.SetEnabled(len(mw.thumbViews) > 0)
 }
 
 var treeItemPath string
@@ -379,38 +403,26 @@ func (mw *MyMainWindow) OnTreeMouseDown(x, y int, button walk.MouseButton) {
 }
 func (mw *MyMainWindow) onThumbViewMouseDn(x, y int, button walk.MouseButton) {
 	var idx int
-	var bounds image.Rectangle
+	var bounds *image.Rectangle
 
-	if mw.thumbView.GetLayoutMode() != 5 {
-		idx = mw.thumbView.GetItemAtScreen(x, y)
+	idx = mw.thumbView.GetItemAtScreen(x, y)
 
-		w := mw.thumbView.itemSize.twm()
-		h := mw.thumbView.itemSize.thm()
-
-		col := int(float32(x) / float32(w))
-		row := int(float32(y+mw.thumbView.viewInfo.topPos) / float32(h))
-		x1 := col * w
-		y1 := row * h
-		bounds = image.Rect(x1, y1+h-mw.thumbView.itemSize.txth, x1+w, y1+h)
-	} else {
-		idx = mw.thumbView.GetItemAtScreenNB2(x, y)
-
-		b := mw.thumbView.GetItemRectAtScreenNB2(x, y)
-		if b != nil {
-			bounds = *b
-			bounds.Min.Y = bounds.Max.Y - 32
-		}
+	bounds = mw.thumbView.getItemRectAtScreen(x, y)
+	if bounds == nil {
+		return
+	}
+	if mw.thumbView.GetLayoutMode() == 0 {
+		bounds.Min.Y = bounds.Max.Y - 32
 	}
 
 	mw.StatusBar().Items().At(2).SetText("  " + mw.thumbView.GetItemName(idx) + "   " + mw.thumbView.GetItemInfo(idx))
 
 	if mw.thumbView.isValidIndex(idx) {
-
-		//popup the ctx menu, depending on the mouse x,y in the
-		//image area.
+		// popup the ctx menu, depending on the mouse x,y in the
+		// image area.
 		if button == walk.RightButton {
 			pt := image.Point{x, y + mw.thumbView.viewInfo.topPos}
-			if pt.In(bounds) {
+			if pt.In(*bounds) {
 				mw.thumbView.SuspendPreview = true
 				mw.thumbView.SetContextMenu(Mw.menuItemAction)
 			} else {
@@ -474,6 +486,11 @@ func addMenuActions(wmenu *walk.Menu, text string, onTriggered walk.EventHandler
 	}
 	wmenu.Actions().Add(itm)
 	return itm
+}
+
+func (mw *MyMainWindow) onAppClose(canceled *bool, reason walk.CloseReason) {
+	*canceled = false
+	//mw.MainWindow.Close()
 }
 
 func main() {
@@ -553,6 +570,12 @@ func main() {
 				AssignTo: &Mw.menuView,
 				Items: []MenuItem{
 					Action{
+						AssignTo:    &Mw.menuView0,
+						Text:        "View image in new window",
+						Checkable:   true,
+						OnTriggered: Mw.onMenuView0,
+					},
+					Action{
 						AssignTo:    &Mw.menuView1,
 						Text:        "Show Folder tree",
 						Checkable:   true,
@@ -568,8 +591,13 @@ func main() {
 					Action{
 						AssignTo:    &Mw.menuView3,
 						Text:        "Add more Viewers",
-						Checkable:   true,
 						OnTriggered: Mw.onMenuView3,
+					},
+					Action{
+						AssignTo:    &Mw.menuView4,
+						Text:        "Remove Viewer",
+						OnTriggered: Mw.onMenuView4,
+						Enabled:     false,
 					},
 				},
 			},
@@ -688,6 +716,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	Mw.Closing().Attach(Mw.onAppClose)
+
 	sbr := Mw.StatusBar()
 	sbr.SetVisible(true)
 
@@ -733,6 +763,7 @@ func main() {
 	//context menus
 	menu, _ := walk.NewMenu()
 	addMenuActions(menu, "&Preview", Mw.onMenuActionPreview, false, false, false)
+	addMenuActions(menu, "&Quickview", Mw.onMenuActionPreview2, false, false, false)
 	addMenuActions(menu, "", nil, true, false, false)
 	addMenuActions(menu, "&Delete", Mw.onMenuActionDelete, false, false, false)
 	addMenuActions(menu, "&Rename", Mw.onMenuActionRename, false, false, false)
@@ -812,8 +843,6 @@ func main() {
 	settings.Put("ThumbViewWidth", strconv.Itoa(Mw.thumbView.viewInfo.parentWidth))
 	settings.Put("LayoutMode", strconv.Itoa(Mw.thumbView.GetLayoutMode()))
 	settings.Put(tableModel.dirPath, strconv.Itoa(Mw.thumbView.viewInfo.topPos))
-
-	//log.Println("LayoutMode", Mw.thumbView.GetLayoutMode())
 
 	if err := settings.Save(); err != nil {
 		log.Fatal(err)

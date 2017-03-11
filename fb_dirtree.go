@@ -159,8 +159,6 @@ func OnTreeCurrentItemChanged() {
 
 	dir := treeView.CurrentItem().(*Directory)
 
-	//log.Println("onActionExplore", dir.Path())
-
 	if err := tableModel.SetDirPath(dir.Path(), true); err != nil {
 		walk.MsgBox(
 			Mw.MainWindow,
@@ -170,57 +168,44 @@ func OnTreeCurrentItemChanged() {
 	}
 }
 
-func locateDir(itms []*Directory, sdir string) *Directory {
-	var res *Directory
-	res = nil
-
-	for _, itm2 := range itms {
-		if itm2.name == sdir {
-			res = itm2
-			break
-		}
-	}
-	return res
-}
-
 func LocatePath(fpath string) bool {
-	var sfile string
-	var paths, paths1 []string
 
-	//split path into parts
-	sdrive := filepath.VolumeName(fpath) + "\\"
-	for {
-		fpath, sfile = filepath.Split(fpath)
-		fpath, _ = filepath.Abs(fpath)
+	locateSubDir := func(itms []*Directory, sdir string) (res *Directory) {
+		res = nil
 
-		if sfile != "" {
-			paths = append(paths, sfile)
-		} else {
-			break
+		for _, itm := range itms {
+			if strings.Contains(sdir, itm.Path()) {
+				res = itm
+				break
+			}
 		}
-	}
-	paths = append(paths, sdrive)
-
-	//flip to a sorted array
-	for i := len(paths) - 1; i >= 0; i-- {
-		paths1 = append(paths1, paths[i])
+		return res
 	}
 
 	tm := treeModel
-	var itmnext *Directory
+loop:
+	for _, v := range tm.roots {
+		if strings.Contains(fpath, v.Path()) {
+			treeView.SetExpanded(v, true)
+			itmsnext := v.children
+			for {
+				itmDir := locateSubDir(itmsnext, fpath)
+				if itmDir != nil {
+					treeView.SetExpanded(itmDir, true)
+					itmsnext = itmDir.children
 
-	for i := 0; i < len(paths1); i++ {
-		if i == 0 {
-			itmnext = locateDir(tm.roots, paths1[i])
-		} else {
-			if itmnext != nil {
-				itmnext = locateDir(itmnext.children, paths1[i])
+					if itmDir.Path() == fpath {
+						treeView.SetCurrentItem(itmDir)
+						return true
+					}
+
+				} else {
+					break loop
+				}
 			}
-		}
-		if itmnext != nil {
-			treeView.SetCurrentItem(itmnext)
-			treeView.SetExpanded(itmnext, true)
+			break
 		}
 	}
-	return true
+
+	return false
 }
