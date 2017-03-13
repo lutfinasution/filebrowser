@@ -33,86 +33,6 @@ var tableModel *FileInfoModel
 var addrList []string
 var settings *walk.IniFileSettings
 
-//type viewRecord struct {
-//	SelectedName string
-//	SortMode     bool
-//}
-//type mapSelection map[string]viewRecord
-
-//type CustomSplitter struct {
-//	*walk.Splitter
-//}
-
-//func (s *CustomSplitter) SetWidgetWidth(widget walk.Widget, newVal int) (err error) {
-
-//	if !s.Splitter.Children().Contains(widget) {
-//		return
-//	}
-
-//	handleIndex := 1 //s.children.Index(dragHandle)
-//	hndl := s.Splitter.Children().At(handleIndex)
-//	prev := s.Splitter.Children().At(handleIndex - 1)
-//	next := s.Splitter.Children().At(handleIndex + 1)
-
-//	prev.SetSuspended(true)
-//	defer prev.Invalidate()
-//	defer prev.SetSuspended(false)
-//	next.SetSuspended(true)
-//	defer next.Invalidate()
-//	defer next.SetSuspended(false)
-//	diff := 0
-
-//	if s.Orientation() == walk.Horizontal {
-//		if prev == widget {
-//			diff = prev.Width() - newVal
-//		} else {
-//			diff = next.Width() - newVal
-//		}
-//		hndl.SetX(hndl.X() + diff)
-//	} else {
-//		if prev == widget {
-//			diff = prev.Height() - newVal
-//		} else {
-//			diff = next.Height() - newVal
-//		}
-//		hndl.SetY(hndl.Y() + diff)
-//	}
-
-//	bh := hndl.Bounds()
-//	bp := prev.Bounds()
-//	bn := next.Bounds()
-
-//	var sizePrev int
-//	var sizeNext int
-
-//	if s.Orientation() == walk.Horizontal {
-//		bp.Width = bh.X - bp.X
-//		bn.Width -= (bh.X + bh.Width) - bn.X
-//		bn.X = bh.X + bh.Width
-//		sizePrev = bp.Width
-//		sizeNext = bn.Width
-//	} else {
-//		bp.Height = bh.Y - bp.Y
-//		bn.Height -= (bh.Y + bh.Height) - bn.Y
-//		bn.Y = bh.Y + bh.Height
-//		sizePrev = bp.Height
-//		sizeNext = bn.Height
-//	}
-
-//	if e := prev.SetBounds(bp); e != nil {
-//		return
-//	}
-
-//	if e := next.SetBounds(bn); e != nil {
-//		return
-//	}
-
-//	layout := s.Splitter.Layout().(*walk.MysplitterLayout)
-//	layout.hwnd2Item[prev.Handle()].size = sizePrev
-//	layout.hwnd2Item[next.Handle()].size = sizeNext
-
-//	return nil
-//}
 type tviews struct {
 	id      win.HWND
 	viewer  *ScrollViewer
@@ -121,12 +41,11 @@ type tviews struct {
 
 type MyMainWindow struct {
 	*walk.MainWindow
-	toolbar    *walk.CustomWidget
-	hSplitter  *walk.Splitter
-	viewBase   *walk.Composite
-	thumbView  *ScrollViewer
-	thumbViews []tviews
-	//thumbView2      *ScrollViewer
+	toolbar         *walk.CustomWidget
+	hSplitter       *walk.Splitter
+	viewBase        *walk.Composite
+	thumbView       *ScrollViewer
+	thumbViews      []tviews
 	btn1            *walk.PushButton
 	paintWidgetMenu *walk.Menu
 	topComposite    *walk.Composite
@@ -164,7 +83,6 @@ func (mw *MyMainWindow) onTest1() {
 			h := mw.thumbView.itemHeight
 			c := 0
 			for i := 0; i < sc.MaxValue(); i += h / 4 {
-				//for i := 0; i < 2*h; i += 1 {
 				sc.SetValue(i)
 				c++
 				if stoptest {
@@ -318,34 +236,34 @@ func (mw *MyMainWindow) onMenuView0() {
 	mw.thumbView.ShowPreviewFull()
 }
 func (mw *MyMainWindow) onMenuView1() {
-
+	//treeView.SetVisible(!treeView.Visible())
+	mw.menuView1.SetChecked(!mw.menuView1.Checked())
+	treeView.Parent().(*walk.Splitter).SetWidgetVisible(treeView, !treeView.Visible())
+	treeView.Parent().SendMessage(win.WM_SIZE, 0, 0)
 }
 func (mw *MyMainWindow) onMenuView2() {
 
 	//mw.hSplitter.SetSplitterPos(20)
 	//mw.hSplitter.SetWidgetWidth(mw.viewBase, 800)
 
-	switch {
-	case tableView.Visible():
-		w := tableView.Width()
-		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
-		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, false)
-		if tableView.Parent().(*walk.Splitter).Width()-w > 200 {
-			mw.hSplitter.SetWidgetWidth(mw.viewBase, mw.viewBase.Width()+w)
-		}
-	case !tableView.Visible():
-		w := tableView.Parent().(*walk.Splitter).Width()
-		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, true)
-		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
-	}
+	//	switch {
+	//	case tableView.Visible():
+	//		w := tableView.Width()
+	//		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
+	//		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, false)
+	//		if tableView.Parent().(*walk.Splitter).Width()-w > 200 {
+	//			mw.hSplitter.SetWidgetWidth(mw.viewBase, mw.viewBase.Width()+w)
+	//		}
+	//	case !tableView.Visible():
+	//		w := tableView.Parent().(*walk.Splitter).Width()
+	//		tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, true)
+	//		tableView.Parent().(*walk.Splitter).SetWidgetWidth(tableView, w/2)
+	//	}
+
+	tableView.Parent().(*walk.Splitter).SetWidgetVisible(tableView, !tableView.Visible())
 
 	mw.menuView2.SetChecked(!mw.menuView2.Checked())
-	//initBuffer = false
-	//mw.thumbView.Invalidate()
-
-	//	if bmpCntr != nil {
-	//		SaveWalkBitmap(bmpCntr, "./bkp/bmpCntr.png")
-	//	}
+	tableView.Parent().SendMessage(win.WM_SIZE, 0, 0)
 }
 func (mw *MyMainWindow) onMenuView3() {
 	// add a thumbviewer object
@@ -367,14 +285,18 @@ func (mw *MyMainWindow) onMenuView3() {
 
 	mw.thumbViews = append(mw.thumbViews, tviews{id: tvw.ID, viewer: tvw, handler: nil})
 	mw.menuView4.SetEnabled(true)
-
 }
 func (mw *MyMainWindow) onMenuView4() {
 	// remove a thumbviewer object
+
 	for i, v := range mw.thumbViews {
 		if v.viewer.scroller.Focused() {
-			v.viewer.destroy()
 
+			err := v.viewer.destroy()
+			if err != nil {
+				log.Println("error removing item")
+				//log.Fatal(err)
+			}
 			mw.viewBase.SendMessage(win.WM_SIZE, 0, 0)
 
 			// resize the mw.thumbViews slice, removing element i
@@ -382,7 +304,6 @@ func (mw *MyMainWindow) onMenuView4() {
 			break
 		}
 	}
-
 	mw.menuView4.SetEnabled(len(mw.thumbViews) > 0)
 }
 
@@ -423,10 +344,10 @@ func (mw *MyMainWindow) onThumbViewMouseDn(x, y int, button walk.MouseButton) {
 		if button == walk.RightButton {
 			pt := image.Point{x, y + mw.thumbView.viewInfo.topPos}
 			if pt.In(*bounds) {
-				mw.thumbView.SuspendPreview = true
+				mw.thumbView.suspendPreview = true
 				mw.thumbView.SetContextMenu(Mw.menuItemAction)
 			} else {
-				mw.thumbView.SuspendPreview = false
+				mw.thumbView.suspendPreview = false
 				mw.thumbView.SetContextMenu(nil)
 			}
 		}
@@ -840,7 +761,6 @@ func main() {
 	settings.Put("ThumbW", strconv.Itoa(Mw.thumbView.itemSize.tw))
 	settings.Put("ThumbH", strconv.Itoa(Mw.thumbView.itemSize.th))
 	settings.Put("Cached", strconv.FormatBool(Mw.thumbView.doCache))
-	settings.Put("ThumbViewWidth", strconv.Itoa(Mw.thumbView.viewInfo.parentWidth))
 	settings.Put("LayoutMode", strconv.Itoa(Mw.thumbView.GetLayoutMode()))
 	settings.Put(tableModel.dirPath, strconv.Itoa(Mw.thumbView.viewInfo.topPos))
 

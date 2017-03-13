@@ -646,8 +646,7 @@ func DrawImage(imgName string, dbf *drawBuffer, dstCanvas *walk.Canvas) bool {
 	//-----------------------------------------
 	// draw full size image for screen viewing
 	//-----------------------------------------
-	//	win.BitBlt(dstCanvas.HDC(), 0, 0, int32(dbf.size.Width), int32(dbf.size.Height),
-	//		dbf.drawHDC, 0, 0, win.SRCCOPY)
+
 	vi := &dbf.viewinfo
 
 	ws, hs := dbf.size.Width, dbf.size.Height
@@ -666,36 +665,32 @@ func DrawImage(imgName string, dbf *drawBuffer, dstCanvas *walk.Canvas) bool {
 	// calculate dest x,y
 	var xd, yd int32
 
-	xd = int32((wv-wd)/2) + int32(math.Ceil(float64(vi.offsetX)*dbf.zoom))
-	yd = int32((hv-hd)/2) + int32(math.Ceil(float64(vi.offsetY)*dbf.zoom))
+	xd = int32(math.Floor(float64(wv-wd)/2)) + int32(math.Floor(float64(vi.offsetX)*dbf.zoom))
+	yd = int32(math.Floor(float64(hv-hd)/2)) + int32(math.Floor(float64(vi.offsetY)*dbf.zoom))
 
 	xd += int32(vi.mousemoveX)
 	yd += int32(vi.mousemoveY)
 
 	vi.currentPos = &walk.Point{int(xd), int(yd)}
 
-	//log.Println("DrawImage xd,yd,vi.lastposX,vi.zoom,vi.zoomlast:", xd, yd, vi.offsetX, vi.zoom, vi.zoomlast)
-
 	// clears background
-	if wd < wv || hd < hv {
-		sz := dbf.zoomSize()
-		if sz.Height < hv {
-			h := (hv - sz.Height) / 2
-			win.BitBlt(dstCanvas.HDC(), 0, 0, int32(wv), int32(h), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
-			y := h + sz.Height
-			win.BitBlt(dstCanvas.HDC(), 0, int32(y), int32(wv), int32(h), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
-		}
-		if sz.Width < wv {
-			w := (wv - sz.Width) / 2
-			win.BitBlt(dstCanvas.HDC(), 0, 0, int32(w), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
-			x := w + sz.Width
-			win.BitBlt(dstCanvas.HDC(), int32(x), 0, int32(wv), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
-		}
-
-		//win.BitBlt(dstCanvas.HDC(), 0, 0, int32(wv), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+	if vi.currentPos.X > 0 {
+		win.BitBlt(dstCanvas.HDC(), 0, 0, int32(vi.currentPos.X), int32(hv), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
 	}
+	if vi.currentPos.X+wd < wv {
+		win.BitBlt(dstCanvas.HDC(), int32(vi.currentPos.X+wd), 0, int32(wv-wd-vi.currentPos.X), int32(hv),
+			dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+	}
+	if vi.currentPos.Y > 0 {
+		win.BitBlt(dstCanvas.HDC(), 0, 0, int32(wv), int32(vi.currentPos.Y), dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+	}
+	if vi.currentPos.Y+hd < hv {
+		win.BitBlt(dstCanvas.HDC(), 0, int32(vi.currentPos.Y+hd), int32(wv), int32(hv-hd-vi.currentPos.Y),
+			dstCanvas.HDC(), 0, 0, win.BLACKNESS)
+	}
+
 	// draw
-	win.SetStretchBltMode(dstCanvas.HDC(), win.HALFTONE)
+	//win.SetStretchBltMode(dstCanvas.HDC(), win.HALFTONE)
 	win.StretchBlt(dstCanvas.HDC(), xd, yd, int32(wd), int32(hd),
 		dbf.drawHDC, 0, 0, int32(ws), int32(hs), win.SRCCOPY)
 

@@ -28,62 +28,56 @@ type ItmMap map[string]*FileInfo
 type painterfunc func(sv *ScrollViewer, canvas *walk.Canvas, updaterect walk.Rectangle, viewrect walk.Rectangle) error
 
 type ScrollViewer struct {
-	ID            win.HWND
-	MainWindow    *walk.MainWindow
-	scrollview    *walk.Composite
-	canvasView    *walk.CustomWidget
-	optionsPanel  *walk.Composite
-	scroller      *CustomSlider
-	scrollControl ScrollController
-	pb1, pb2      *walk.PushButton
-	itemSize      ThumbSizes
-	itemSizeTmp   *ThumbSizes
-	itemsCount    int
-	itemWidth     int
-	itemHeight    int
-	SelectedIndex int
-	currentLayout int
-
+	MainWindow     *walk.MainWindow
+	scrollview     *walk.Composite
+	canvasView     *walk.CustomWidget
+	optionsPanel   *walk.Composite
+	scroller       *CustomSlider
+	scrollcmp      *walk.Composite
+	scrollControl  ScrollController
+	scrlUp, scrlDn *walk.PushButton
+	ID             win.HWND
+	itemSize       ThumbSizes
+	itemsCount     int
+	itemWidth      int
+	itemHeight     int
+	SelectedIndex  int
+	currentLayout  int
+	dblClickTime   time.Time
 	// basic data structs
 	itemsModel *FileInfoModel
 	ItemsMap   ItmMap
 	viewInfo   ViewInfo
-
-	// public event handlers
-	evPaint     painterfunc
-	evMouseDown walk.MouseEventHandler
-
 	// concurrent processors
 	imageProcessor   *ImageProcessor
 	contentMonitor   *ContentMonitor
 	directoryMonitor *DirectoryMonitor
-
 	// screen drawers:
+	drawersCount  int
+	drawerHDC     win.HDC
+	drawerBuffer  *drawBuffer
+	drawerFunc    func(sv *ScrollViewer, path string, data *FileInfo)
+	drawersChan   chan *FileInfo
+	drawersWait   sync.WaitGroup
+	drawerMutex   sync.Mutex
 	drawersActive bool
-	//	drawerBitmap  *walk.Bitmap
-	//	drawerCanvas  *walk.Canvas
-	drawerHDC    win.HDC
-	drawerBuffer *drawBuffer
-	drawerMutex  sync.Mutex
-	drawersCount int
-	drawersChan  chan *FileInfo
-	drawersWait  sync.WaitGroup
-	drawerFunc   func(sv *ScrollViewer, path string, data *FileInfo)
 
 	// local vars
-	SuspendPreview     bool
+	suspendPreview     bool
 	isResizing         bool
 	doCache            bool
 	handleChangedItems bool
 	lastButtonDown     walk.MouseButton
 	PreviewRect        *walk.Rectangle
 	previewBackground  *walk.Bitmap
-	//	bmpCntr            *walk.Bitmap
-	//	cvsCntr            *walk.Canvas
+	// ui
 	lblSize  *walk.Label
 	cmbMode  *walk.ComboBox
 	sldrSize *walk.Slider
 	cbCached *walk.CheckBox
+	// public event handlers
+	evPaint     painterfunc
+	evMouseDown walk.MouseEventHandler
 }
 
 type drawBuffer struct {
@@ -98,7 +92,13 @@ type drawBuffer struct {
 }
 
 func (db *drawBuffer) canPan() bool {
-	return db.zoom != 0 && (db.zoomSize().Width > db.viewinfo.viewRect.Dx() || db.zoomSize().Height > db.viewinfo.viewRect.Dy())
+	return (db.zoom != 0) && (db.zoomSize().Width > db.viewinfo.viewRect.Dx() || db.zoomSize().Height > db.viewinfo.viewRect.Dy())
+}
+func (db *drawBuffer) canPanX() bool {
+	return (db.zoom != 0) && (db.zoomSize().Width > db.viewinfo.viewRect.Dx())
+}
+func (db *drawBuffer) canPanY() bool {
+	return (db.zoom != 0) && (db.zoomSize().Height > db.viewinfo.viewRect.Dy())
 }
 func (db *drawBuffer) zoomSize() walk.Size {
 
@@ -107,10 +107,21 @@ func (db *drawBuffer) zoomSize() walk.Size {
 	if db.zoom != 0 {
 		return walk.Size{int(db.zoom * float64(ws)), int(db.zoom * float64(hs))}
 	} else {
-		wv, hv := db.viewinfo.viewRect.Dx(), db.viewinfo.viewRect.Dy()
-		wd, hd := getOptimalThumbSize(wv, hv, ws, hs)
-		return walk.Size{wd, hd}
+		return db.fitSize()
 	}
+}
+func (db *drawBuffer) zoomSizeAt(fzoom float64) walk.Size {
+
+	ws, hs := db.size.Width, db.size.Height
+
+	return walk.Size{int(fzoom * float64(ws)), int(fzoom * float64(hs))}
+}
+func (db *drawBuffer) fitSize() walk.Size {
+
+	wd, hd := getOptimalThumbSize(db.viewinfo.viewRect.Dx(), db.viewinfo.viewRect.Dy(),
+		db.size.Width, db.size.Height)
+
+	return walk.Size{wd, hd}
 }
 
 func NewDrawBuffer(width, height int) *drawBuffer {
@@ -122,8 +133,6 @@ func NewDrawBuffer(width, height int) *drawBuffer {
 		db.size = walk.Size{width, height}
 		db.drawHDC = win.CreateCompatibleDC(0)
 		db.hdcOld = win.HDC(win.SelectObject(db.drawHDC, win.HGDIOBJ(db.drawDib)))
-
-		//log.Println("db.drawHDC,db.drawDib created", db.drawHDC, db.hdcOld, db.drawDib)
 	}
 
 	return db
@@ -135,7 +144,6 @@ func DeleteDrawBuffer(db *drawBuffer) (res bool) {
 	res = res && win.DeleteObject(win.HGDIOBJ(db.drawDib))
 
 	db = nil
-	//log.Println("DeleteDrawBuffer ", res)
 	return res
 }
 
@@ -147,7 +155,6 @@ type ViewInfo struct {
 	numRows     int
 	viewRows    int
 	viewRect    image.Rectangle
-	parentWidth int
 	//
 	mouseposX  int
 	mouseposY  int
@@ -157,12 +164,11 @@ type ViewInfo struct {
 	offsetY    int
 	currentPos *walk.Point
 	//
-	scrollpos    int
-	scrolling    bool
-	initSLBuffer bool
-	showName     bool
-	showDate     bool
-	showInfo     bool
+	scrollpos int
+	scrolling bool
+	showName  bool
+	showDate  bool
+	showInfo  bool
 }
 
 //var viewInfo ViewInfo
@@ -285,10 +291,8 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 		i := 0
 
 	loop:
-		//for key, _ := range itms {
 		for {
 			if !ip.doCancelation {
-				//for n := 0; n < gorCount; n++ {
 				n := 0
 				key := getNextItem()
 				if key != "" {
@@ -302,7 +306,6 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 				} else {
 					break loop
 				}
-				//}
 			}
 
 			if i%4 == 0 {
@@ -310,7 +313,6 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 					ip.workStatus.DrawProgress(i)
 				}
 			}
-			//i++
 		}
 
 		if ip.infofunc != nil {
@@ -446,35 +448,37 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 	svr.canvasView, _ = walk.NewCustomWidget(svr.scrollview, 0, svr.onPaint)
 	svr.canvasView.SetPaintMode(walk.PaintNoErase)
 
+	svr.scrollcmp, _ = walk.NewComposite(svr.scrollview)
+
 	//----------------------
 	//CustomSlider
 	//----------------------
 	ctv := new(CustomSlider)
 	ctv.host = svr
-	ctv.Slider, err = walk.NewSliderWithOrientation(svr.scrollview, walk.Vertical)
+	ctv.Slider, err = walk.NewSliderWithOrientation(svr.scrollcmp, walk.Vertical)
 	svr.scroller = ctv
 	if err := walk.InitWrapperWindow(ctv); err != nil {
 		log.Fatal(err)
 	}
 	svr.scroller.KeyDown().Attach(svr.OnKeyPress)
 
-	svr.pb1, _ = walk.NewPushButton(svr.scrollview)
-	svr.pb2, _ = walk.NewPushButton(svr.scrollview)
+	svr.scrlUp, _ = walk.NewPushButton(svr.scrollview)
+	svr.scrlDn, _ = walk.NewPushButton(svr.scrollview)
 
-	svr.pb1.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.pb1) })
-	svr.pb2.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.pb2) })
-	svr.pb1.MouseUp().Attach(svr.OnButtonUp)
-	svr.pb2.MouseUp().Attach(svr.OnButtonUp)
+	svr.scrlUp.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.scrlUp) })
+	svr.scrlDn.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.scrlDn) })
+	svr.scrlUp.MouseUp().Attach(svr.OnButtonUp)
+	svr.scrlDn.MouseUp().Attach(svr.OnButtonUp)
 
 	img, err := walk.NewImageFromFile("./image/aup.png")
-	svr.pb1.SetImage(img)
+	svr.scrlUp.SetImage(img)
 	img, err = walk.NewImageFromFile("./image/adown.png")
-	svr.pb2.SetImage(img)
+	svr.scrlDn.SetImage(img)
 
-	svr.pb1.SetText(".")
-	svr.pb2.SetText(".")
-	svr.pb1.SetImageAboveText(true)
-	svr.pb2.SetImageAboveText(true)
+	svr.scrlUp.SetText(".")
+	svr.scrlDn.SetText(".")
+	svr.scrlUp.SetImageAboveText(true)
+	svr.scrlDn.SetImageAboveText(true)
 
 	svr.optionsPanel, err = walk.NewComposite(svr.scrollview)
 
@@ -623,7 +627,9 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 
 	br, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
 	svr.canvasView.SetBackground(br)
-	svr.scrollview.Parent().SetBackground(br)
+
+	br, _ = walk.NewSolidColorBrush(walk.RGB(44, 44, 44))
+	svr.scrollcmp.SetBackground(br)
 
 	svr.onSizeParentChanged()
 	svr.resizing()
@@ -672,7 +678,15 @@ func (sv *ScrollViewer) closeDrawers() {
 		sv.drawersWait.Wait()
 	}
 }
-func (sv *ScrollViewer) destroy() {
+func (sv *ScrollViewer) destroy() error {
+
+	defer func() {
+		if err := recover(); err != nil { //catch
+			log.Println("recover")
+			err = nil
+		}
+	}()
+
 	sv.closeDrawers()
 	sv.directoryMonitor.Close()
 	sv.imageProcessor.Close(sv)
@@ -680,9 +694,16 @@ func (sv *ScrollViewer) destroy() {
 
 	p := sv.scrollview.Parent().AsContainerBase().Children()
 	i := p.Index(sv.scrollview)
-	p.RemoveAt(i)
+
+	err := p.RemoveAt(i)
+	if err != nil {
+		log.Println("error removing item")
+		//log.Fatal(err)
+		//err = nil
+	}
 
 	sv.scrollview.Dispose()
+	//log.Println("resume after error removing item")
 
 	if sv.drawerBuffer != nil {
 		DeleteDrawBuffer(sv.drawerBuffer)
@@ -695,7 +716,7 @@ func (sv *ScrollViewer) destroy() {
 	for k, _ := range sv.ItemsMap {
 		delete(sv.ItemsMap, k)
 	}
-
+	return err
 }
 
 func (sv *ScrollViewer) Run(dirPath string, itemsModel *FileInfoModel, watchThisPath bool) {
@@ -741,8 +762,6 @@ func (sv *ScrollViewer) Run(dirPath string, itemsModel *FileInfoModel, watchThis
 
 	sv.contentMonitor.removeChangedItems(sv.contentMonitor.doneMap)
 
-	sv.viewInfo.initSLBuffer = false
-
 	//Updating to reflect the num of items
 	sv.SetItemsCount(len(sv.itemsModel.items))
 
@@ -760,9 +779,9 @@ func (sv *ScrollViewer) Run(dirPath string, itemsModel *FileInfoModel, watchThis
 	}
 }
 func (sv *ScrollViewer) OnButtonDown(button *walk.PushButton) {
-	if button == sv.pb1 {
+	if button == sv.scrlUp {
 		sv.scrollControl.doScroll(sv.setScrollPosBy, -sv.itemHeight/2)
-	} else if button == sv.pb2 {
+	} else if button == sv.scrlDn {
 		sv.scrollControl.doScroll(sv.setScrollPosBy, sv.itemHeight/2)
 	}
 }
@@ -852,8 +871,20 @@ func (sv *ScrollViewer) OnMouseUp(x, y int, button walk.MouseButton) {
 	sv.viewInfo.scrollpos = 0
 
 	//Display image preview
-	if sv.lastButtonDown == walk.RightButton && !sv.SuspendPreview {
+	if sv.lastButtonDown == walk.RightButton && !sv.suspendPreview {
 		sv.PreviewItemAtScreen(x, y)
+	}
+
+	//double click to launch preview
+	if sv.dblClickTime.IsZero() {
+		sv.dblClickTime = time.Now()
+	} else {
+		d := time.Since(sv.dblClickTime)
+		if d.Seconds() < 0.500 {
+			//log.Println("doubleclick", d.Seconds())
+			sv.ShowPreviewFull()
+		}
+		sv.dblClickTime = time.Now()
 	}
 }
 
@@ -880,9 +911,16 @@ func (sv *ScrollViewer) resizing() {
 	sv.optionsPanel.SetBounds(walk.Rectangle{0, 0, sv.Width() - 28, 30})
 	sv.canvasView.SetBounds(walk.Rectangle{0, 30, sv.Width() - 28, sv.Height() - 30})
 
-	sv.scroller.SetBounds(walk.Rectangle{sv.Width() - 34, 28, 36, sv.Height() - 56})
-	sv.pb1.SetBounds(walk.Rectangle{sv.Width() - 28, 0, 28, 28})
-	sv.pb2.SetBounds(walk.Rectangle{sv.Width() - 28, sv.Height() - 28, 28, 28})
+	sv.scrollcmp.SetBounds(walk.Rectangle{sv.Width() - 28, 30, 28, sv.Height() - 56})
+	r := sv.scrollcmp.ClientBounds()
+	r.X -= 6
+	r.Y -= 4
+	r.Width += 8
+	r.Height += 8
+	sv.scroller.SetBounds(r)
+
+	sv.scrlUp.SetBounds(walk.Rectangle{sv.Width() - 29, 3, 30, 28})
+	sv.scrlDn.SetBounds(walk.Rectangle{sv.Width() - 29, sv.Height() - 27, 30, 28})
 
 	sv.recalc()
 }
@@ -1200,8 +1238,6 @@ func (sv *ScrollViewer) recalc() int {
 	sv.viewInfo.topPos = sv.scroller.Value()
 	sv.viewInfo.numCols = sv.NumCols()
 	sv.viewInfo.viewRows = sv.NumRowsVisible()
-	sv.viewInfo.parentWidth = sv.Width()
-	sv.viewInfo.initSLBuffer = false
 
 	r := image.Rect(0, sv.viewInfo.topPos, sv.ViewWidth(), sv.viewInfo.topPos+sv.ViewHeight())
 	sv.viewInfo.viewRect = r
