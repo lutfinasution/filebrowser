@@ -10,12 +10,9 @@ import (
 	"log"
 	"math"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 import (
@@ -28,22 +25,20 @@ type ItmMap map[string]*FileInfo
 type painterfunc func(sv *ScrollViewer, canvas *walk.Canvas, updaterect walk.Rectangle, viewrect walk.Rectangle) error
 
 type ScrollViewer struct {
-	MainWindow     *walk.MainWindow
-	scrollview     *walk.Composite
-	canvasView     *walk.CustomWidget
-	optionsPanel   *walk.Composite
-	scroller       *CustomSlider
-	scrollcmp      *walk.Composite
-	scrollControl  ScrollController
-	scrlUp, scrlDn *walk.PushButton
-	ID             win.HWND
-	itemSize       ThumbSizes
-	itemsCount     int
-	itemWidth      int
-	itemHeight     int
-	SelectedIndex  int
-	currentLayout  int
-	dblClickTime   time.Time
+	MainWindow       *walk.MainWindow
+	scrollview       *CustomScrollComposite
+	canvasView       *walk.CustomWidget
+	optionsPanel     *walk.Composite
+	ID               win.HWND
+	itemSize         ThumbSizes
+	itemsCount       int
+	itemWidth        int
+	itemHeight       int
+	SelectedIndex    int
+	currentLayout    int
+	currentSortIndex int
+	currentSortOrder int
+	dblClickTime     time.Time
 	// basic data structs
 	itemsModel *FileInfoModel
 	ItemsMap   ItmMap
@@ -56,12 +51,11 @@ type ScrollViewer struct {
 	drawersCount  int
 	drawerHDC     win.HDC
 	drawerBuffer  *drawBuffer
-	drawerFunc    func(sv *ScrollViewer, path string, data *FileInfo)
+	drawerFunc    func(sv *ScrollViewer, data *FileInfo)
 	drawersChan   chan *FileInfo
 	drawersWait   sync.WaitGroup
 	drawerMutex   sync.Mutex
 	drawersActive bool
-
 	// local vars
 	suspendPreview     bool
 	isResizing         bool
@@ -72,79 +66,13 @@ type ScrollViewer struct {
 	previewBackground  *walk.Bitmap
 	// ui
 	lblSize  *walk.Label
+	cmbSort  *walk.ComboBox
 	cmbMode  *walk.ComboBox
 	sldrSize *walk.Slider
 	cbCached *walk.CheckBox
 	// public event handlers
 	evPaint     painterfunc
 	evMouseDown walk.MouseEventHandler
-}
-
-type drawBuffer struct {
-	size     walk.Size
-	drawDib  win.HBITMAP
-	drawPtr  unsafe.Pointer
-	drawHDC  win.HDC
-	hdcOld   win.HDC
-	destHDC  win.HDC
-	zoom     float64
-	viewinfo ViewInfo
-}
-
-func (db *drawBuffer) canPan() bool {
-	return (db.zoom != 0) && (db.zoomSize().Width > db.viewinfo.viewRect.Dx() || db.zoomSize().Height > db.viewinfo.viewRect.Dy())
-}
-func (db *drawBuffer) canPanX() bool {
-	return (db.zoom != 0) && (db.zoomSize().Width > db.viewinfo.viewRect.Dx())
-}
-func (db *drawBuffer) canPanY() bool {
-	return (db.zoom != 0) && (db.zoomSize().Height > db.viewinfo.viewRect.Dy())
-}
-func (db *drawBuffer) zoomSize() walk.Size {
-
-	ws, hs := db.size.Width, db.size.Height
-
-	if db.zoom != 0 {
-		return walk.Size{int(db.zoom * float64(ws)), int(db.zoom * float64(hs))}
-	} else {
-		return db.fitSize()
-	}
-}
-func (db *drawBuffer) zoomSizeAt(fzoom float64) walk.Size {
-
-	ws, hs := db.size.Width, db.size.Height
-
-	return walk.Size{int(fzoom * float64(ws)), int(fzoom * float64(hs))}
-}
-func (db *drawBuffer) fitSize() walk.Size {
-
-	wd, hd := getOptimalThumbSize(db.viewinfo.viewRect.Dx(), db.viewinfo.viewRect.Dy(),
-		db.size.Width, db.size.Height)
-
-	return walk.Size{wd, hd}
-}
-
-func NewDrawBuffer(width, height int) *drawBuffer {
-	db := new(drawBuffer)
-
-	db.drawDib, db.drawPtr = createDrawDibsection(width, height)
-
-	if db.drawDib != 0 {
-		db.size = walk.Size{width, height}
-		db.drawHDC = win.CreateCompatibleDC(0)
-		db.hdcOld = win.HDC(win.SelectObject(db.drawHDC, win.HGDIOBJ(db.drawDib)))
-	}
-
-	return db
-}
-func DeleteDrawBuffer(db *drawBuffer) (res bool) {
-	win.SelectObject(db.hdcOld, win.HGDIOBJ(db.drawDib))
-
-	res = win.DeleteDC(db.drawHDC)
-	res = res && win.DeleteObject(win.HGDIOBJ(db.drawDib))
-
-	db = nil
-	return res
 }
 
 type ViewInfo struct {
@@ -171,264 +99,21 @@ type ViewInfo struct {
 	showInfo  bool
 }
 
-//var viewInfo ViewInfo
-
-type workitem struct {
-	path string
-	done bool
-}
-type WorkMap map[string]*workitem
-type ImageProcessor struct {
-	workmap       WorkMap
-	doCancelation bool
-	donewait      sync.WaitGroup
-	workerWaiter  sync.WaitGroup
-	imageWorkChan []chan string
-	workStatus    *ProgresDrawer
-	workCounter   uint64
-	statuswidget  *walk.StatusBar
-	statusfunc    func(i int)
-	infofunc      func(numjob int, d float64)
-}
-
-func (ip *ImageProcessor) setstatuswidget(widget *walk.StatusBar) {
-	ip.statuswidget = widget
-}
-func (ip *ImageProcessor) Close(sv *ScrollViewer) bool {
-
-	ip.donewait.Add(1)
-	ip.workCounter = 0
-	gorCount := runtime.NumCPU()
-
-	go func() {
-		log.Println("Terminating all ImageProcessor goroutines")
-
-		//setup waiters
-		ip.workerWaiter.Add(gorCount)
-
-		for i := 0; i < gorCount; i++ {
-			key := ""
-
-			//send exit data through
-			//worker channel
-			ip.imageWorkChan[0] <- key
-		}
-		//wait for all workers to finish
-		ip.workerWaiter.Wait()
-		ip.donewait.Done()
-
-		log.Println("ImageProcessor goroutines all terminated")
-
-	}()
-
-	return true
-}
-func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath string) bool {
-	runtime.GC()
-	sv.handleChangedItems = false
-
-	if ip.workmap == nil {
-		ip.workmap = make(WorkMap)
-	}
-
-	if len(ip.workmap) > 0 {
-		ip.doCancelation = true
-		ip.donewait.Wait()
-		ip.doCancelation = false
-	}
-
-	numJob := len(jobList)
-
-	//add work items to workmap
-	for _, v := range jobList {
-		ip.workmap[filepath.Join(dirpath, v.Name)] = &workitem{path: dirpath}
-	}
-
-	//determine the num of worker goroutines
-	gorCount := runtime.NumCPU()
-	ip.donewait.Add(1)
-	ip.workCounter = 0
-
-	if ip.imageWorkChan == nil {
-		ip.imageWorkChan = make([]chan string, gorCount)
-		for i := range ip.imageWorkChan {
-			ip.imageWorkChan[i] = make(chan string)
-		}
-		//--------------------------
-		//run the worker goroutines
-		//--------------------------
-		for j := 0; j < gorCount; j++ {
-			//go ip.doRenderTasker(sv, j+1, ip.imageWorkChan[j])    //with individual channel
-			go ip.doRenderTasker(sv, j+1, ip.imageWorkChan[0]) //with just one shared channel
-		}
-	}
-
-	go func(itms WorkMap) {
-		t := time.Now()
-
-		getNextItem := func() (res string) {
-			for key, _ := range itms {
-				res = key
-				delete(itms, key)
-				break
-			}
-			return res
-		}
-
-		//Load data from cache
-		n := sv.CacheDBEnum(dirpath)
-
-		log.Println("CacheDBEnum found", n, "in", dirpath)
-
-		if ip.statuswidget != nil {
-			ip.workStatus = NewProgresDrawer(ip.statuswidget.AsWidgetBase(), 240, numJob)
-		}
-
-		//setup waiters
-		ip.workerWaiter.Add(len(itms))
-
-		//run the distributor
-		i := 0
-
-	loop:
-		for {
-			if !ip.doCancelation {
-				n := 0
-				key := getNextItem()
-				if key != "" {
-					//send data through worker channel
-					ip.imageWorkChan[n] <- key
-
-					if ip.statusfunc != nil {
-						ip.statusfunc(i)
-					}
-					i++
-				} else {
-					break loop
-				}
-			}
-
-			if i%4 == 0 {
-				if ip.workStatus != nil {
-					ip.workStatus.DrawProgress(i)
-				}
-			}
-		}
-
-		if ip.infofunc != nil {
-			d := time.Since(t).Seconds()
-			ip.infofunc(numJob, d)
-
-			sv.recalc()
-		}
-		sv.canvasView.Synchronize(func() {
-			sv.canvasView.Invalidate()
-		})
-
-		//wait for all workers to finish
-		ip.workerWaiter.Wait()
-
-		//log.Println("ImageProcessor Run finished", itms, sv.ItemsMap)
-
-		if ip.workStatus != nil {
-			ip.workStatus.Clear()
-		}
-
-		//update db for items in this path only
-		cntupd, _ := sv.CacheDBUpdateMapItems(sv.ItemsMap, dirpath)
-
-		sv.handleChangedItems = true
-
-		if !ip.doCancelation {
-			wc := atomic.LoadUint64(&ip.workCounter)
-			log.Println("Cache items processed: ", wc)
-			log.Println("Cache items updated: ", cntupd)
-		}
-		ip.donewait.Done()
-	}(ip.workmap)
-
-	return true
-}
-
-func (ip *ImageProcessor) doRenderTasker(sv *ScrollViewer, id int, fnames chan string) bool {
-	//icount := 0
-loop:
-	for v := range fnames {
-		if v != "" {
-			if processImageData(sv, v, true, nil) != nil {
-				atomic.AddUint64(&ip.workCounter, 1)
-			}
-
-			//decrement the wait counter
-			ip.workerWaiter.Done()
-		} else {
-			log.Println("doRenderTasker exiting..this-should-not-have-happened.")
-			break loop
-		}
-	}
-	return true
-}
-
-type ScrollController struct {
-	isRunning  bool
-	isDone     bool
-	doneWaiter sync.WaitGroup
-}
-
-func (sc *ScrollController) Init() {
-	sc.doneWaiter.Add(1)
-}
-func (sc *ScrollController) endScroll() {
-	if sc.isRunning {
-		sc.isRunning = false
-		sc.doneWaiter.Wait()
-	}
-}
-func (sc *ScrollController) doScroll(scrollfunc func(val int) int, scrollBy int) {
-
-	scrollfunc(scrollBy)
-
-	if !sc.isRunning {
-		sc.Init()
-
-		go func() {
-			sc.isRunning = true
-			i := 0
-			delay := 100
-			for {
-				if sc.isRunning {
-					if i > 5 { //delay the loop for 500msec
-						scrollfunc(scrollBy)
-
-						delay = 70 - (i/15)*10
-						if delay < 30 {
-							delay = 30
-						}
-					}
-					time.Sleep(time.Millisecond * time.Duration(delay))
-				} else {
-					break
-				}
-				i++
-			}
-			sc.doneWaiter.Done()
-		}()
-	}
-}
-
 func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc walk.PaintFunc, itmCount, itmWidth, itmHeight int) (*ScrollViewer, error) {
 	var err error
 	var defSize = ThumbSizes{120, 75, 10, 10, 48}
 
 	svr := &ScrollViewer{
-		MainWindow:    window,
-		itemsCount:    itmCount,
-		itemWidth:     defSize.twm(),
-		itemHeight:    defSize.thm(),
-		itemSize:      defSize,
-		SelectedIndex: -1,
-		currentLayout: 0,
-		ItemsMap:      make(map[string]*FileInfo),
+		MainWindow:       window,
+		itemsCount:       itmCount,
+		itemWidth:        defSize.twm(),
+		itemHeight:       defSize.thm(),
+		itemSize:         defSize,
+		SelectedIndex:    -1,
+		currentLayout:    0,
+		currentSortIndex: 0,
+		currentSortOrder: 0,
+		ItemsMap:         make(map[string]*FileInfo),
 	}
 
 	svr.itemsModel = new(FileInfoModel)
@@ -443,50 +128,20 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 	svr.directoryMonitor.imagemon = svr.contentMonitor
 
 	parent.SetSuspended(true)
+	defer parent.SetSuspended(false)
+
 	//UI components:
-	svr.scrollview, _ = walk.NewComposite(parent)
+	svr.scrollview, _ = NewCustomScrollComposite(parent, svr)
 	svr.canvasView, _ = walk.NewCustomWidget(svr.scrollview, 0, svr.onPaint)
+
 	svr.canvasView.SetPaintMode(walk.PaintNoErase)
-
-	svr.scrollcmp, _ = walk.NewComposite(svr.scrollview)
-
-	//----------------------
-	//CustomSlider
-	//----------------------
-	ctv := new(CustomSlider)
-	ctv.host = svr
-	ctv.Slider, err = walk.NewSliderWithOrientation(svr.scrollcmp, walk.Vertical)
-	svr.scroller = ctv
-	if err := walk.InitWrapperWindow(ctv); err != nil {
-		log.Fatal(err)
-	}
-	svr.scroller.KeyDown().Attach(svr.OnKeyPress)
-
-	svr.scrlUp, _ = walk.NewPushButton(svr.scrollview)
-	svr.scrlDn, _ = walk.NewPushButton(svr.scrollview)
-
-	svr.scrlUp.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.scrlUp) })
-	svr.scrlDn.MouseDown().Attach(func(x, y int, button walk.MouseButton) { svr.OnButtonDown(svr.scrlDn) })
-	svr.scrlUp.MouseUp().Attach(svr.OnButtonUp)
-	svr.scrlDn.MouseUp().Attach(svr.OnButtonUp)
-
-	img, err := walk.NewImageFromFile("./image/aup.png")
-	svr.scrlUp.SetImage(img)
-	img, err = walk.NewImageFromFile("./image/adown.png")
-	svr.scrlDn.SetImage(img)
-
-	svr.scrlUp.SetText(".")
-	svr.scrlDn.SetText(".")
-	svr.scrlUp.SetImageAboveText(true)
-	svr.scrlDn.SetImageAboveText(true)
-
+	svr.canvasView.SetInvalidatesOnResize(true)
 	svr.optionsPanel, err = walk.NewComposite(svr.scrollview)
 
-	var pb1, pb2, pb3, pb4, pb5 *walk.ToolButton
+	var pb1 *walk.ToolButton
 
 	//Declarative style
 	ft := Font{Family: parent.Font().Family(), PointSize: 10, Bold: false}
-	ft2 := Font{Family: parent.Font().Family(), PointSize: 9, Bold: true}
 	bldr := NewBuilder(svr.scrollview)
 
 	err = (Composite{
@@ -498,53 +153,32 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 				Layout: Grid{Columns: 8, Margins: Margins{Top: 1, Left: 1, Right: 1, Bottom: 0}, MarginsZero: false},
 				Children: []Widget{
 					Composite{
-						Layout: Grid{Columns: 5, SpacingZero: true, MarginsZero: true},
+						Column: 0,
+						Layout: Grid{Columns: 2, SpacingZero: true, MarginsZero: true},
 						OnSizeChanged: func() {
-							pb1.SetWidth(90)
-							pb2.SetWidth(90)
-							pb3.SetWidth(90)
-							pb4.SetWidth(90)
-							pb5.SetWidth(90)
+							pb1.SetWidth(100)
 						},
 						Children: []Widget{
+							ComboBox{
+								AssignTo: &svr.cmbSort,
+								Editable: false,
+								Model: []string{
+									" Sort by Name",
+									" Sort by Size",
+									" Sort by Date",
+									" Sort by Width",
+									" Sort by Height",
+								},
+								OnCurrentIndexChanged: func() {
+									svr.setSortMode2(svr.cmbSort.CurrentIndex(), svr.cmbSort.Format() == "", -1)
+								},
+							},
 							ToolButton{
 								AssignTo:    &pb1,
-								Text:        "N",
-								ToolTipText: "Sort by name",
+								Text:        ".|'",
+								ToolTipText: "Toggle sort ascending/descending",
 								OnClicked: func() {
-									svr.onSorterAction(pb1)
-								},
-							},
-							ToolButton{
-								AssignTo:    &pb2,
-								Text:        "S",
-								ToolTipText: "Sort by size",
-								OnClicked: func() {
-									svr.onSorterAction(pb2)
-								},
-							},
-							ToolButton{
-								AssignTo:    &pb3,
-								Text:        "D",
-								ToolTipText: "Sort by date",
-								OnClicked: func() {
-									svr.onSorterAction(pb3)
-								},
-							},
-							ToolButton{
-								AssignTo:    &pb4,
-								Text:        "W",
-								ToolTipText: "Sort by width",
-								OnClicked: func() {
-									svr.onSorterAction(pb4)
-								},
-							},
-							ToolButton{
-								AssignTo:    &pb5,
-								Text:        "H",
-								ToolTipText: "Sort by height",
-								OnClicked: func() {
-									svr.onSorterAction(pb5)
+									svr.setSortMode2(svr.cmbSort.CurrentIndex(), true, -1)
 								},
 							},
 						},
@@ -562,20 +196,18 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 					ComboBox{
 						AssignTo: &svr.cmbMode,
 						Editable: false,
-						Font:     ft2,
 						Model: []string{
-							"Frameless, variable size",
-							"Grid with name, date, and size",
-							"Grid with name and date",
-							"Grid with name and size",
-							"Grid with name only",
-							"Grid with no text",
+							" Frameless, variable size",
+							" Grid with name, date, and size",
+							" Grid with name and date",
+							" Grid with name and size",
+							" Grid with name only",
+							" Grid with no text",
+							" Infocard",
 						},
 						OnCurrentIndexChanged: svr.setLayoutMode,
 					},
-					HSpacer{
-						ColumnSpan: 1,
-					},
+					HSpacer{},
 					Composite{
 						Layout: VBox{Margins: Margins{Top: 1, Left: 1, Right: 1, Bottom: 1}, MarginsZero: false},
 						Children: []Widget{
@@ -591,7 +223,7 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 					Slider{
 						AssignTo:       &svr.sldrSize,
 						MaxValue:       300,
-						MinValue:       120,
+						MinValue:       64,
 						MinSize:        Size{100, 0},
 						MaxSize:        Size{300, 0},
 						OnValueChanged: svr.setItemSize,
@@ -619,55 +251,23 @@ func NewScrollViewer(window *walk.MainWindow, parent walk.Container, paintfunc w
 	svr.canvasView.MouseDown().Attach(svr.OnMouseDown)
 	svr.canvasView.MouseMove().Attach(svr.OnMouseMove)
 	svr.canvasView.MouseUp().Attach(svr.OnMouseUp)
-	svr.canvasView.KeyPress().Attach(svr.OnKeyPress)
+
+	svr.scrollview.KeyPress().Attach(svr.OnKeyPress)
 	svr.scrollview.SizeChanged().Attach(svr.onSizeChanged)
-	svr.scroller.ValueChanged().Attach(svr.OnScrollerValueChanged)
 
 	parent.SizeChanged().Attach(svr.onSizeParentChanged)
 
 	br, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
 	svr.canvasView.SetBackground(br)
 
-	br, _ = walk.NewSolidColorBrush(walk.RGB(44, 44, 44))
-	svr.scrollcmp.SetBackground(br)
-
 	svr.onSizeParentChanged()
 	svr.resizing()
 	svr.SetLayoutMode(0)
-
-	parent.SetSuspended(false)
 
 	svr.ID = svr.scrollview.Handle()
 	return svr, err
 }
 
-func (sv *ScrollViewer) onSorterAction(tb *walk.ToolButton) {
-
-	flipsort := func(index int) {
-		if sv.itemsModel.SortedColumn() == index {
-			if sv.itemsModel.SortOrder() == walk.SortAscending {
-				sv.itemsModel.Sort(index, walk.SortDescending)
-			} else {
-				sv.itemsModel.Sort(index, walk.SortAscending)
-			}
-		} else {
-			sv.itemsModel.Sort(index, walk.SortAscending)
-		}
-	}
-	switch {
-	case tb.Text() == "N":
-		flipsort(0)
-	case tb.Text() == "S":
-		flipsort(1)
-	case tb.Text() == "D":
-		flipsort(2)
-	case tb.Text() == "W":
-		flipsort(4)
-	case tb.Text() == "H":
-		flipsort(5)
-	}
-	sv.Invalidate()
-}
 func (sv *ScrollViewer) closeDrawers() {
 	if sv.drawersActive && sv.drawersChan != nil {
 		sv.drawersWait.Add(sv.drawersCount)
@@ -733,6 +333,14 @@ func (sv *ScrollViewer) Run(dirPath string, itemsModel *FileInfoModel, watchThis
 		log.Println("ScrollViewer.Run exit, no items in itemsModel")
 		return
 	}
+	// resort data if necessary
+	// needed for the first run
+	if sv.cmbSort.CurrentIndex() != sv.currentSortIndex {
+		sv.setSortMode2(sv.cmbSort.CurrentIndex(), true, sv.currentSortOrder)
+
+		log.Println("ScrollViewer.Run resorting")
+	}
+
 	//--------------------------------------
 	//create map containing the file infos
 	//--------------------------------------
@@ -778,16 +386,7 @@ func (sv *ScrollViewer) Run(dirPath string, itemsModel *FileInfoModel, watchThis
 		sv.directoryMonitor.setFolderWatcher(dirPath)
 	}
 }
-func (sv *ScrollViewer) OnButtonDown(button *walk.PushButton) {
-	if button == sv.scrlUp {
-		sv.scrollControl.doScroll(sv.setScrollPosBy, -sv.itemHeight/2)
-	} else if button == sv.scrlDn {
-		sv.scrollControl.doScroll(sv.setScrollPosBy, sv.itemHeight/2)
-	}
-}
-func (sv *ScrollViewer) OnButtonUp(x, y int, button walk.MouseButton) {
-	sv.scrollControl.endScroll()
-}
+
 func (sv *ScrollViewer) oncanvasViewpaint(canvas *walk.Canvas, updaterect walk.Rectangle) error {
 	return nil
 }
@@ -799,13 +398,15 @@ func (sv *ScrollViewer) OnKeyPress(key walk.Key) {
 		sv.ShowPreviewFull()
 	case walk.KeyLeft:
 		sv.SetItemSelected(sv.SelectedIndex - 1)
+		sv.Repaint()
 	case walk.KeyRight:
+		sv.SetItemSelected(sv.SelectedIndex + 1)
+		sv.Repaint()
 	case walk.KeyUp:
-		sv.setScrollPosBy(-1)
+		sv.setScrollPosBy(-sv.itemHeight / 4)
 	case walk.KeyDown:
-		sv.setScrollPosBy(1)
+		sv.setScrollPosBy(sv.itemHeight / 4)
 	}
-
 }
 func (sv *ScrollViewer) OnMouseDown(x, y int, button walk.MouseButton) {
 
@@ -837,7 +438,7 @@ func (sv *ScrollViewer) OnMouseDown(x, y int, button walk.MouseButton) {
 		sv.viewInfo.scrollpos = sv.viewInfo.topPos
 	}
 
-	sv.scroller.SetFocus()
+	sv.scrollview.SetFocus()
 	sv.Repaint()
 }
 func (sv *ScrollViewer) OnMouseMove(x, y int, button walk.MouseButton) {
@@ -845,15 +446,14 @@ func (sv *ScrollViewer) OnMouseMove(x, y int, button walk.MouseButton) {
 	if button == walk.LeftButton && sv.PreviewRect == nil {
 		sv.viewInfo.mousemoveY = sv.viewInfo.mouseposY - y
 
-		if sv.scroller.Value() != (sv.viewInfo.scrollpos + sv.viewInfo.mousemoveY) {
-			sv.scroller.SetValue(sv.viewInfo.scrollpos + sv.viewInfo.mousemoveY)
-		}
+		val := sv.viewInfo.scrollpos + sv.viewInfo.mousemoveY
+		sv.SetScroll(val)
 	} else {
 		prt := sv.scrollview.Parent().AsContainerBase()
 		num := prt.Children().Len()
 
 		hwnd := GetForegroundWindow()
-		if hwnd == sv.MainWindow.Handle() && num > 0 && !sv.scroller.Focused() {
+		if hwnd == sv.MainWindow.Handle() && num > 0 && !sv.scrollview.Focused() {
 			sv.SetFocus()
 		}
 	}
@@ -905,22 +505,13 @@ func (sv *ScrollViewer) onSizeParentChanged() {
 }
 func (sv *ScrollViewer) onSizeChanged() {
 	sv.resizing()
-	defer doResizing(sv)
+	//defer doResizing(sv)
 }
 func (sv *ScrollViewer) resizing() {
-	sv.optionsPanel.SetBounds(walk.Rectangle{0, 0, sv.Width() - 28, 30})
-	sv.canvasView.SetBounds(walk.Rectangle{0, 30, sv.Width() - 28, sv.Height() - 30})
+	rs := int(win.GetSystemMetrics(win.SM_CXVSCROLL))
 
-	sv.scrollcmp.SetBounds(walk.Rectangle{sv.Width() - 28, 30, 28, sv.Height() - 56})
-	r := sv.scrollcmp.ClientBounds()
-	r.X -= 6
-	r.Y -= 4
-	r.Width += 8
-	r.Height += 8
-	sv.scroller.SetBounds(r)
-
-	sv.scrlUp.SetBounds(walk.Rectangle{sv.Width() - 29, 3, 30, 28})
-	sv.scrlDn.SetBounds(walk.Rectangle{sv.Width() - 29, sv.Height() - 27, 30, 28})
+	sv.optionsPanel.SetBounds(walk.Rectangle{0, 0, sv.Width() - rs - 1, 30})
+	sv.canvasView.SetBounds(walk.Rectangle{0, 30, sv.Width() - rs - 1, sv.Height() - 30})
 
 	sv.recalc()
 }
@@ -978,11 +569,6 @@ func (sv *ScrollViewer) setLayoutMode() {
 
 	sv.currentLayout = sv.cmbMode.CurrentIndex()
 
-	if sv.cmbMode.CurrentIndex() != 0 {
-		sv.itemSize.mx = 10
-		sv.itemSize.my = 10
-	}
-
 	switch sv.cmbMode.CurrentIndex() {
 	case 0:
 		sv.itemSize.mx = 0
@@ -993,34 +579,52 @@ func (sv *ScrollViewer) setLayoutMode() {
 		sv.viewInfo.showDate = false
 		sv.viewInfo.showInfo = false
 	case 1:
+		sv.itemSize.mx = 10
+		sv.itemSize.my = 10
 		sv.evPaint = RedrawScreenNB
 		sv.viewInfo.showName = true
 		sv.viewInfo.showDate = true
 		sv.viewInfo.showInfo = true
 		sv.itemSize.txth = 3 * 16
 	case 2:
+		sv.itemSize.mx = 10
+		sv.itemSize.my = 10
 		sv.evPaint = RedrawScreenNB
 		sv.viewInfo.showName = true
 		sv.viewInfo.showDate = true
 		sv.viewInfo.showInfo = false
 		sv.itemSize.txth = 2 * 17
 	case 3:
+		sv.itemSize.mx = 10
+		sv.itemSize.my = 10
 		sv.evPaint = RedrawScreenNB
 		sv.viewInfo.showName = true
 		sv.viewInfo.showDate = false
 		sv.viewInfo.showInfo = true
 		sv.itemSize.txth = 2 * 17
 	case 4:
+		sv.itemSize.mx = 10
+		sv.itemSize.my = 10
 		sv.evPaint = RedrawScreenNB
 		sv.viewInfo.showName = true
 		sv.viewInfo.showDate = false
 		sv.viewInfo.showInfo = false
 		sv.itemSize.txth = 1 * 20
 	case 5:
+		sv.itemSize.mx = 10
+		sv.itemSize.my = 10
 		sv.evPaint = RedrawScreenNB
 		sv.viewInfo.showName = false
 		sv.viewInfo.showDate = false
 		sv.viewInfo.showInfo = false
+		sv.itemSize.txth = 0
+	case 6:
+		sv.itemSize.mx = 6
+		sv.itemSize.my = 6
+		sv.evPaint = RedrawScreenNB3
+		sv.viewInfo.showName = true
+		sv.viewInfo.showDate = true
+		sv.viewInfo.showInfo = true
 		sv.itemSize.txth = 0
 	}
 	sv.itemWidth = sv.itemSize.twm()
@@ -1038,12 +642,68 @@ func (sv *ScrollViewer) SetLayoutMode(idx int) {
 	case 1, 2, 3, 4, 5:
 		sv.evPaint = RedrawScreenNB
 		sv.cmbMode.SetCurrentIndex(idx)
+	case 6:
+		sv.evPaint = RedrawScreenNB3
+		sv.cmbMode.SetCurrentIndex(idx)
 	}
 }
 func (sv *ScrollViewer) GetLayoutMode() int {
 	return sv.currentLayout
 }
+func (sv *ScrollViewer) GetSortMode() int {
+	return sv.currentSortIndex
+}
+func (sv *ScrollViewer) GetSortOrder() int {
+	return sv.currentSortOrder
+}
+func (sv *ScrollViewer) SetSortMode(idx, order int) bool {
+	sv.cmbSort.SetFormat("-")
+	sv.cmbSort.SetCurrentIndex(idx) // this will call setSortMode2
 
+	//sv.currentSortIndex = idx
+	sv.currentSortOrder = order
+
+	return true
+}
+func (sv *ScrollViewer) setSortMode2(idx int, doAction bool, sortOrder int) {
+
+	flipsort := func(index int, order int) {
+		if order == -1 {
+			if sv.itemsModel.SortedColumn() == index {
+				if sv.itemsModel.SortOrder() == walk.SortAscending {
+					sv.itemsModel.Sort(index, walk.SortDescending)
+				} else {
+					sv.itemsModel.Sort(index, walk.SortAscending)
+				}
+			} else {
+				sv.itemsModel.Sort(index, walk.SortAscending)
+			}
+		} else {
+			sv.itemsModel.Sort(index, walk.SortOrder(order))
+
+		}
+	}
+	if doAction {
+		switch idx {
+		case 0:
+			flipsort(0, sortOrder)
+		case 1:
+			flipsort(1, sortOrder)
+		case 2:
+			flipsort(2, sortOrder)
+		case 3:
+			flipsort(4, sortOrder)
+		case 4:
+			flipsort(5, sortOrder)
+		}
+		sv.Invalidate()
+		sv.currentSortIndex = sv.cmbSort.CurrentIndex()
+		sv.currentSortOrder = int(sv.itemsModel.SortOrder())
+		//	} else {
+		//		sv.cmbSort.SetFormat("")
+	}
+	sv.cmbSort.SetFormat("")
+}
 func (sv *ScrollViewer) GetItemName(idx int) (res string) {
 
 	if sv.isValidIndex(idx) {
@@ -1063,15 +723,29 @@ func (sv *ScrollViewer) GetItemInfo(idx int) (res string) {
 }
 func (sv *ScrollViewer) GetItemAtScreen(x int, y int) (idx int) {
 
-	if sv.GetLayoutMode() == 0 {
+	switch sv.GetLayoutMode() {
+	case 0:
 		idx = sv.getItemAtScreenNB2(x, y)
-	} else {
+	case 1, 2, 3, 4, 5:
 		col := x / sv.itemWidth
 		idx = -1
 
 		if col < sv.NumCols() {
 			row := int(float32(y+sv.viewInfo.topPos) / float32(sv.itemHeight))
 			idx = col + row*sv.NumCols()
+			if idx >= sv.itemsCount {
+				idx = -1
+			}
+		}
+	case 6:
+		w := sv.itemWidth + 150
+		col := x / w
+		idx = -1
+		cols := sv.canvasView.Width() / w
+
+		if col < cols {
+			row := (y + sv.viewInfo.topPos) / sv.itemHeight
+			idx = col + row*cols
 			if idx >= sv.itemsCount {
 				idx = -1
 			}
@@ -1112,7 +786,8 @@ func (sv *ScrollViewer) getItemAtScreenNB2(xs, ys int) int {
 	return -1
 }
 func (sv *ScrollViewer) getItemRectAtScreen(xs, ys int) *image.Rectangle {
-	if sv.GetLayoutMode() != 0 {
+	switch sv.GetLayoutMode() {
+	case 1, 2, 3, 4, 5:
 		w := sv.itemSize.twm()
 		h := sv.itemSize.thm()
 
@@ -1122,9 +797,20 @@ func (sv *ScrollViewer) getItemRectAtScreen(xs, ys int) *image.Rectangle {
 		y1 := row * h
 		r := image.Rect(x1, y1+h-sv.itemSize.txth, x1+w, y1+h)
 		return &r
-	} else {
+	case 6:
+		w := sv.itemSize.twm() + 150
+		h := sv.itemSize.thm()
+
+		col := int(float32(xs) / float32(w))
+		row := int(float32(ys+sv.viewInfo.topPos) / float32(h))
+		x1 := col * w
+		y1 := row * h
+		r := image.Rect(x1, y1+h-sv.itemSize.txth, x1+w, y1+h)
+		return &r
+	case 0:
 		return sv.getItemRectAtScreenNB2(xs, ys)
 	}
+	return nil
 }
 
 func (sv *ScrollViewer) getItemRectAtScreenNB2(xs, ys int) *image.Rectangle {
@@ -1179,7 +865,7 @@ func (sv *ScrollViewer) getTotalHeightNB2() int {
 		}
 		x += wd
 	}
-	return y + h + 2
+	return y + h
 }
 
 func (sv *ScrollViewer) isValidIndex(idx int) bool {
@@ -1225,17 +911,14 @@ func (sv *ScrollViewer) recalc() int {
 		hMax = sv.getTotalHeightNB2()
 	case 1, 2, 3, 4, 5:
 		hMax = sv.NumRows() * sv.itemHeight
+	case 6:
+		cols := math.Trunc(float64(sv.canvasView.Width()) / float64(sv.itemWidth+150))
+		hMax = sv.itemHeight * int(math.Ceil(float64(sv.itemsCount)/cols))
 	}
 
-	sv.scroller.SetRange(0, hMax-sv.ViewHeight())
-	sv.scroller.SendMessage(win.WM_USER+21, 0, uintptr(sv.itemHeight*(sv.NumRowsVisible()-1))) //TBM_SETPAGESIZE
-	sv.scroller.SendMessage(win.WM_USER+23, 0, uintptr(sv.itemHeight))                         //TBM_SETLINESIZE
+	sv.scrollview.updateScrollbar(hMax-sv.ViewHeight(), 2*sv.itemHeight, sv.itemHeight, 10)
 
-	wstyle := win.GetWindowLong(sv.scroller.Handle(), win.GWL_STYLE)
-	wstyle = wstyle | 0x0008 //0x0040
-	win.SetWindowLong(sv.scroller.Handle(), win.GWL_STYLE, wstyle)
-
-	sv.viewInfo.topPos = sv.scroller.Value()
+	sv.viewInfo.topPos = sv.scrollview.Value()
 	sv.viewInfo.numCols = sv.NumCols()
 	sv.viewInfo.viewRows = sv.NumRowsVisible()
 
@@ -1272,7 +955,7 @@ func (sv *ScrollViewer) SetEventSizeChanged(eventproc walk.EventHandler) {
 	sv.scrollview.SizeChanged().Attach(eventproc)
 }
 func (sv *ScrollViewer) SetFocus() {
-	sv.scroller.SetFocus()
+	sv.scrollview.SetFocus()
 }
 func (sv *ScrollViewer) SelectedItem() *FileInfo {
 	if sv.SelectedIndex >= 0 {
@@ -1370,59 +1053,77 @@ func (sv *ScrollViewer) exitPreviewMode() bool {
 	return false
 }
 func (sv *ScrollViewer) ResetScrollPos() {
-	sv.scroller.SetValue(0)
-	sv.canvasView.Invalidate()
-}
-func (sv *ScrollViewer) setScrollPosBy(val int) int {
-	sv.scroller.Synchronize(func() {
-		sv.scroller.SetValue(sv.scroller.Value() + val)
-	})
-	return sv.scroller.Value()
+	//	sv.scrollview.SetValue(0)
+	//	sv.canvasView.Invalidate()
+
+	sv.SetScroll(0)
 }
 func (sv *ScrollViewer) SetScrollPos(val int) {
-	sv.scroller.SetValue(val)
-	sv.Invalidate()
-	//sv.Repaint()
-}
-func (sv *ScrollViewer) SetRowScroll(val int) {
+	//	sv.scrollview.SetValue(val)
+	//	sv.Invalidate()
 
-	//	if val == viewInfo.topPos {
-	//		return
+	sv.SetScroll(val)
+}
+func (sv *ScrollViewer) setScrollPosBy(val int) int {
+	sv.scrollview.Synchronize(func() {
+		sv.SetScroll(sv.scrollview.Value() + val)
+	})
+
+	return sv.scrollview.Value()
+}
+func (sv *ScrollViewer) SetScroll(val int) {
+	//	if val < 0 {
+	//		val = 0
 	//	}
 
-	r := image.Rect(0, val, sv.ViewWidth(), val+sv.ViewHeight())
-
-	iscrollSize := int(math.Abs(float64(val - sv.viewInfo.topPos)))
-
-	if iscrollSize > 2*sv.itemHeight {
-		iscrollSize = 2 * sv.itemHeight
+	if val == sv.viewInfo.topPos {
+		return
 	}
 
-	bScrollDown := (val > sv.viewInfo.topPos)
+	var pos int
+	if sv.scrollview.Value() != val {
+		pos = sv.scrollview.SetValue(val)
 
-	sv.viewInfo.topPos = val
-	sv.viewInfo.numCols = sv.NumCols()
-	sv.viewInfo.viewRows = sv.NumRowsVisible()
-	sv.viewInfo.viewRect = r
+		if val != pos {
+			val = pos
+		}
+	}
+	// calculate the source rect
+	rSrc := image.Rect(0, val, sv.ViewWidth(), val+sv.ViewHeight())
+
+	iscrollSize := abs(val - sv.viewInfo.topPos)
+
+	if iscrollSize > 2*sv.itemHeight {
+		//		log.Println("SetScroll: jump scroll", iscrollSize, val, sv.viewInfo.topPos)
+		iscrollSize = sv.NumRowsVisible() * sv.itemHeight
+	}
 
 	cvs, _ := sv.canvasView.CreateCanvas()
 	defer cvs.Dispose()
 
 	//detect scroll direction
 	//setup update rect, reflecting the exposed scroll area
-	posY := 0
-	if bScrollDown {
-		posY = r.Max.Y - iscrollSize
-	} else {
-		posY = r.Min.Y
+
+	y := 0
+	// ScrollDown:
+	if val > sv.viewInfo.topPos {
+		y = rSrc.Max.Y - iscrollSize
+	} else if val < sv.viewInfo.topPos {
+		y = rSrc.Min.Y
 	}
-	rupdate := walk.Rectangle{0, posY, sv.ViewWidth(), iscrollSize}
+	sv.viewInfo.topPos = val
+	sv.viewInfo.numCols = sv.NumCols()
+	sv.viewInfo.viewRows = sv.NumRowsVisible()
+	sv.viewInfo.viewRect = rSrc
+
+	// calculate the target rect
+	rDst := walk.Rectangle{0, y, sv.ViewWidth(), iscrollSize}
 
 	//set scrolling flag for the onpaint
 	sv.viewInfo.scrolling = true
 
 	//trigger onpaint to handle the rest of the drawing
-	sv.onPaint(cvs, rupdate)
+	sv.onPaint(cvs, rDst)
 
 	//switch back the flag
 	sv.viewInfo.scrolling = false
@@ -1481,9 +1182,10 @@ func (sv *ScrollViewer) NumRowsFit() int {
 func (sv *ScrollViewer) NumCols() int {
 	return int(math.Trunc(float64(sv.canvasView.Width()) / float64(sv.itemWidth)))
 }
-func (sv *ScrollViewer) OnScrollerValueChanged() {
-	sv.SetRowScroll(sv.scroller.Value())
-}
+
+//func (sv *ScrollViewer) OnScrollerValueChanged() {
+//	sv.SetRowScroll(sv.scroller.Value())
+//}
 func (sv *ScrollViewer) onPaint(canvas *walk.Canvas, updaterect walk.Rectangle) error {
 	//Shift screen update rect
 	//to virtual view rect
@@ -1516,7 +1218,7 @@ func (sv *ScrollViewer) setSelectionVisible() {
 		row := idx / sv.NumCols()
 		top := row * sv.itemHeight
 
-		if sv.scroller.Value() != top {
+		if sv.scrollview.Value() != top {
 			toprow := top - (sv.ViewHeight()-sv.itemHeight)/2
 
 			if toprow < 0 {
@@ -1570,159 +1272,6 @@ func (sv *ScrollViewer) directoryMonitorInfoHandler(path string) {
 		}
 	})
 }
-
-type CustomSlider struct {
-	*walk.Slider
-	host *ScrollViewer
-}
-
-func (sl *CustomSlider) WndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
-	switch msg {
-	case win.WM_HSCROLL, win.WM_VSCROLL:
-		//switch win.LOWORD(uint32(wParam)) {
-		//case win.TB_THUMBPOSITION, win.TB_ENDTRACK:
-		//sl.valueChangedPublisher.Publish()
-		//}
-		sl.host.OnScrollerValueChanged()
-		return 0
-	case win.WM_MOUSEWHEEL:
-		if delta := int16(win.HIWORD(uint32(wParam))); delta < 0 {
-			//DOWN
-			sl.Slider.SetValue(sl.Slider.Value() + sl.host.itemHeight)
-		} else {
-			//UP
-			sl.Slider.SetValue(sl.Slider.Value() - sl.host.itemHeight)
-		}
-
-		return 0
-	}
-	return sl.WidgetBase.WndProc(hwnd, msg, wParam, lParam)
-}
-
-type ContentMonitor struct {
-	//viewer         *ScrollViewer
-	imageprocessor *ImageProcessor
-	changeMap      ItmMap
-	doneMap        ItmMap
-	activated      bool
-	infofunc       func()
-	itmMutex       sync.Mutex
-	runMutex       sync.Mutex
-	statuswidget   *walk.StatusBar
-}
-
-func (im *ContentMonitor) setstatuswidget(widget *walk.StatusBar) {
-	im.statuswidget = widget
-}
-func (im *ContentMonitor) removeChangedItem(mkey string) {
-	if im.changeMap != nil {
-		if _, ok := im.changeMap[mkey]; ok {
-			delete(im.changeMap, mkey)
-		}
-	}
-}
-func (im *ContentMonitor) removeChangedItems(cmp ItmMap) {
-	if cmp != nil {
-		for k, _ := range cmp {
-			delete(cmp, k)
-		}
-	}
-}
-func (im *ContentMonitor) submitChangedItem(mkey string, cItm *FileInfo) {
-	if im.changeMap == nil {
-		im.changeMap = make(ItmMap)
-	}
-	if im.doneMap == nil {
-		im.doneMap = make(ItmMap)
-	}
-
-	//new item must not already be in the doneMap & changeMap
-	im.itmMutex.Lock()
-	if _, ok := im.doneMap[mkey]; !ok {
-		if _, ok := im.changeMap[mkey]; !ok {
-			im.changeMap[mkey] = cItm
-			im.changeMap[mkey].Changed = true
-
-			log.Println("submitChangedItem: ", mkey)
-		}
-
-	}
-	im.itmMutex.Unlock()
-}
-
-func (im *ContentMonitor) processChangedItem(sv *ScrollViewer, repaint bool) {
-	if im.changeMap == nil {
-		return
-	}
-	if len(im.changeMap) == 0 {
-		return
-	}
-	if !im.activated {
-		//copy changeMap to a string slice
-		//important to stability
-		var worklist []string
-		for key, _ := range im.changeMap {
-			worklist = append(worklist, key)
-		}
-
-		go func(workitmlist []string) {
-			ires := 0
-			//im.runMutex.Lock()
-			im.activated = true
-			log.Println("processChangedItem ---------------------------------")
-
-			jobStatus := NewProgresDrawer(im.statuswidget.AsWidgetBase(), 100, len(workitmlist))
-
-			if im.imageprocessor.imageWorkChan != nil {
-				im.imageprocessor.workerWaiter.Add(len(workitmlist))
-
-				for i, key := range workitmlist {
-					//send data to workers by writing
-					//to the common channel
-
-					//key shouldn't already be in doneMap
-					if _, ok := im.doneMap[key]; !ok {
-
-						im.imageprocessor.imageWorkChan[0] <- key
-
-						im.itmMutex.Lock()
-						im.doneMap[key] = &FileInfo{Name: key}
-						im.itmMutex.Unlock()
-
-						v := im.doneMap[key]
-						v.dbsynched = false
-
-						if jobStatus != nil {
-							jobStatus.DrawProgress(i)
-						}
-						ires = i
-					}
-				}
-				im.imageprocessor.workerWaiter.Wait()
-			}
-			if len(workitmlist) > 0 {
-				n, _ := sv.CacheDBUpdateMapItems(im.doneMap, "")
-
-				im.itmMutex.Lock()
-				im.removeChangedItems(im.changeMap)
-				im.itmMutex.Unlock()
-
-				if repaint && ires > 0 {
-					if im.infofunc != nil {
-						im.infofunc()
-					}
-					sv.canvasView.Synchronize(func() {
-						sv.canvasView.Invalidate()
-					})
-				}
-
-				log.Println("processChangedItem/processImageData: ", ires+1)
-				log.Println("processChangedItem/CacheDBUpdateMapItems: ", n)
-				jobStatus.Clear()
-			}
-
-			im.activated = false
-			//im.runMutex.Unlock()
-		}(worklist)
-	}
+func (sv *ScrollViewer) MaxScrollValue() int {
+	return sv.scrollview.MaxValue()
 }

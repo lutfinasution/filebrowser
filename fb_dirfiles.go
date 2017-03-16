@@ -198,9 +198,9 @@ func AppSetDirSettings(sv *ScrollViewer, dirPath string) {
 }
 func AppGetDirSettings(sv *ScrollViewer, dirPath string) {
 	if s, ok := settings.Get(dirPath); ok {
-		sv.viewInfo.topPos, _ = strconv.Atoi(s)
+		val, _ := strconv.Atoi(s)
 
-		sv.SetScrollPos(sv.viewInfo.topPos)
+		sv.SetScrollPos(val)
 	}
 }
 

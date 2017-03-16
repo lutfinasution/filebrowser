@@ -37,13 +37,10 @@ type ThumbViewWindow struct {
 	viewBase     *walk.Composite
 	thumbView    *ScrollViewer
 
-	lblAddr        *walk.Label
-	cmbAddr        *walk.ComboBox
-	btnOptions     *walk.PushButton
 	menuItemAction *walk.Menu
 	menuKeepLoc    *walk.Action
-	ViewSlider     *walk.Slider
-	prevFilePath   string
+	//ViewSlider     *walk.Slider
+	prevFilePath string
 }
 
 func (mw *ThumbViewWindow) onActionReload() {
@@ -52,7 +49,6 @@ func (mw *ThumbViewWindow) onActionReload() {
 
 	mw.StatusBar().Invalidate()
 	mw.MainWindow.SetTitle(mw.thumbView.itemsModel.dirPath + " (" + strconv.Itoa(mw.thumbView.itemsCount) + " files)")
-	mw.UpdateAddreebar(mw.thumbView.itemsModel.dirPath)
 }
 func (mw *ThumbViewWindow) onActionDelete() {
 
@@ -109,10 +105,6 @@ func (mw *ThumbViewWindow) onActionKeepLoc() {
 	}
 }
 
-func (mw *ThumbViewWindow) OnToolbarClick(x, y int, button walk.MouseButton) {
-
-}
-
 func (mw *ThumbViewWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton) {
 	w := mw.thumbView.itemSize.twm()
 	h := mw.thumbView.itemSize.thm()
@@ -138,31 +130,6 @@ func (mw *ThumbViewWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton)
 				mw.thumbView.SetContextMenu(nil)
 			}
 		}
-	}
-}
-func (mw *ThumbViewWindow) onTableColClick(n int) {
-	mw.thumbView.Invalidate()
-}
-func (mw *ThumbViewWindow) UpdateAddreebar(spath string) {
-	f := false
-	for i, adr := range addrList {
-		if adr == spath {
-			f = true
-			mw.cmbAddr.SetCurrentIndex(i)
-			break
-		}
-	}
-
-	if !f {
-		addrList = append(addrList, spath)
-		mw.cmbAddr.SetModel(addrList)
-	}
-
-	mw.cmbAddr.SetText(spath)
-}
-func (mw *ThumbViewWindow) onToolbarSizeChanged() {
-	if mw.btnOptions != nil {
-		mw.btnOptions.SetBounds(walk.Rectangle{mw.topComposite.Bounds().Width - 42, 7, 40, 28})
 	}
 }
 func NewThumbViewWindow(parent *walk.MainWindow, newpath string) int {
@@ -193,32 +160,8 @@ func NewThumbViewWindow(parent *walk.MainWindow, newpath string) int {
 		Layout:   VBox{Margins: Margins{Top: 0, Left: 2, Right: 2, Bottom: 2}, MarginsZero: false},
 		Children: []Widget{
 			Composite{
-				Layout:        Grid{Columns: 3},
-				AssignTo:      &tvw.topComposite,
-				MinSize:       Size{0, 32},
-				MaxSize:       Size{0, 32},
-				OnSizeChanged: tvw.onToolbarSizeChanged,
-				Font:          myFont,
-				Children: []Widget{
-					Label{
-						AssignTo: &tvw.lblAddr,
-						Text:     "Address: ",
-					},
-					ComboBox{
-						AssignTo:   &tvw.cmbAddr,
-						Editable:   true,
-						ColumnSpan: 1,
-					},
-					HSpacer{
-						Size: 40,
-					},
-				},
-			},
-			Composite{
-				Name:   "thumbviewComposite",
-				Layout: HBox{MarginsZero: true},
-				//StretchFactor: 3,
-				//RowSpan:  3,
+				Name:     "thumbviewComposite",
+				Layout:   HBox{MarginsZero: true},
 				AssignTo: &tvw.viewBase,
 			},
 		},
@@ -247,20 +190,6 @@ func NewThumbViewWindow(parent *walk.MainWindow, newpath string) int {
 	tvw.thumbView.SetDirectoryMonitorInfoFunc(tvw.directoryMonitorInfoHandler)
 	tvw.thumbView.SetProcessStatuswidget(tvw.StatusBar())
 	tvw.thumbView.SetEventMouseDown(tvw.onDrawPanelMouseDn)
-
-	//	tvw.lblAddr, _ = walk.NewLabel(tvw.topComposite)
-	//	tvw.topComposite.Children().Add(tvw.lblAddr)
-	//	tvw.lblAddr.SetText("Address:")
-
-	//	tvw.cmbAddr, _ = walk.NewComboBox(tvw.topComposite)
-	//	tvw.topComposite.Children().Add(tvw.cmbAddr)
-
-	tvw.btnOptions, _ = walk.NewPushButton(tvw.topComposite)
-	tvw.btnOptions.SetText("   ")
-	img, _ := walk.NewImageFromFile("./image/menu.png")
-	tvw.btnOptions.SetImage(img)
-	tvw.btnOptions.SetImageAboveText(true)
-	//tvw.btnOptions.Clicked().Attach(tvw.thumbView.SetOptionMode)
 
 	//context menus
 	menu, _ := walk.NewMenu()
@@ -340,9 +269,6 @@ func NewThumbViewWindow(parent *walk.MainWindow, newpath string) int {
 
 	tvw.StatusBar().Invalidate()
 	tvw.MainWindow.SetTitle(newpath + " (" + strconv.Itoa(tvw.thumbView.itemsCount) + " files)")
-	tvw.UpdateAddreebar(newpath)
-
-	tvw.onToolbarSizeChanged()
 	/*-----------------------------
 	   START THE WINDOW MAIN LOOP
 	------------------------------*/

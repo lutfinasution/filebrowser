@@ -79,11 +79,12 @@ func (mw *MyMainWindow) onTest1() {
 		go func() {
 			testrun1 = true
 			t := time.Now()
-			sc := mw.thumbView.scroller
+			sc := mw.thumbView
 			h := mw.thumbView.itemHeight
 			c := 0
-			for i := 0; i < sc.MaxValue(); i += h / 4 {
-				sc.SetValue(i)
+			for i := 0; i < sc.MaxScrollValue(); i += h / 4 {
+				sc.SetScroll(i)
+
 				c++
 				if stoptest {
 					stoptest = false
@@ -96,7 +97,6 @@ func (mw *MyMainWindow) onTest1() {
 			testrun1 = false
 			d := time.Since(t).Seconds()
 			fps := float64(c) / d
-
 			mw.StatusBar().Items().At(2).SetText(fmt.Sprintf("scrolltest done in %6.3f sec. at %6.1f fps", d, fps))
 		}()
 	} else {
@@ -290,7 +290,7 @@ func (mw *MyMainWindow) onMenuView4() {
 	// remove a thumbviewer object
 
 	for i, v := range mw.thumbViews {
-		if v.viewer.scroller.Focused() {
+		if v.viewer.scrollview.Focused() {
 
 			err := v.viewer.destroy()
 			if err != nil {
@@ -414,6 +414,9 @@ func (mw *MyMainWindow) onAppClose(canceled *bool, reason walk.CloseReason) {
 	//mw.MainWindow.Close()
 }
 
+var ts1, ts2 *walk.Splitter
+var cmp1, cmp2 *walk.Composite
+
 func main() {
 	var err error
 
@@ -436,6 +439,8 @@ func main() {
 
 	//apply settings to window
 	app.SetSettings(settings)
+
+	var lbl1 *walk.Label
 
 	myFont := *new(Font)
 	myFont.PointSize = 10
@@ -567,60 +572,95 @@ func main() {
 				AssignTo:    &Mw.hSplitter,
 
 				Children: []Widget{
-					HSplitter{
+					VSplitter{
 						HandleWidth: 6,
-						Name:        "treetableSplitter",
+						Name:        "leftbarSplitter",
+						AssignTo:    &ts1,
 						Children: []Widget{
-							TreeView{
-								AssignTo:             &treeView,
-								Model:                treeModel,
-								OnCurrentItemChanged: OnTreeCurrentItemChanged,
-								OnMouseDown:          Mw.OnTreeMouseDown,
-								Font:                 myFont,
+							Composite{
+								AssignTo: &cmp1,
+								Layout:   HBox{Margins: Margins{4, 1, 4, 1}},
+								MinSize:  Size{0, 24},
+								MaxSize:  Size{0, 24},
+								OnMouseDown: func(x, y int, mb walk.MouseButton) {
+									//ts2.SetVisible(!ts2.Visible())
+									h := ts2.Height()
+									ts2.SetHeight(0)
+									cmp2.SetY(cmp2.Y() - h)
+									cmp2.SetHeight(cmp2.Height() + h)
+									ts1.SaveState()
+									//ts1.Layout().Update(false)
+								},
+								Children: []Widget{
+									Label{
+										AssignTo: &lbl1,
+										Text:     "Folders",
+										Font:     myFont,
+									},
+									HSpacer{},
+								},
 							},
-							TableView{
-								AssignTo:              &tableView,
-								AlternatingRowBGColor: walk.RGB(255, 255, 224),
-								CheckBoxes:            true,
-								ColumnsOrderable:      true,
-								MultiSelection:        true,
-								Font:                  myFont,
-								Columns: []TableViewColumn{
-									TableViewColumn{
-										DataMember: "Name",
-										Width:      240,
+							HSplitter{
+								HandleWidth: 6,
+								Name:        "treetableSplitter",
+								AssignTo:    &ts2,
+								Children: []Widget{
+									TreeView{
+										AssignTo:             &treeView,
+										Model:                treeModel,
+										OnCurrentItemChanged: OnTreeCurrentItemChanged,
+										OnMouseDown:          Mw.OnTreeMouseDown,
+										Font:                 myFont,
 									},
-									TableViewColumn{
-										DataMember: "Size",
-										Format:     "%d",
-										Alignment:  AlignFar,
-										Width:      64,
-									},
-									TableViewColumn{
-										DataMember: "Modified",
-										Format:     "2006-01-02 15:04:05",
-										Width:      120,
-									},
-									TableViewColumn{
-										DataMember: "Type",
-										Width:      64,
-									},
-									TableViewColumn{
-										DataMember: "Width",
-										Alignment:  AlignFar,
-										Format:     "%d",
-										Width:      40,
-									},
-									TableViewColumn{
-										DataMember: "Height",
-										Alignment:  AlignFar,
-										Format:     "%d",
-										Width:      40,
+									TableView{
+										AssignTo:              &tableView,
+										AlternatingRowBGColor: walk.RGB(255, 255, 224),
+										CheckBoxes:            true,
+										ColumnsOrderable:      true,
+										MultiSelection:        true,
+										Font:                  myFont,
+										Columns: []TableViewColumn{
+											TableViewColumn{
+												DataMember: "Name",
+												Width:      240,
+											},
+											TableViewColumn{
+												DataMember: "Size",
+												Format:     "%d",
+												Alignment:  AlignFar,
+												Width:      64,
+											},
+											TableViewColumn{
+												DataMember: "Modified",
+												Format:     "2006-01-02 15:04:05",
+												Width:      120,
+											},
+											TableViewColumn{
+												DataMember: "Type",
+												Width:      64,
+											},
+											TableViewColumn{
+												DataMember: "Width",
+												Alignment:  AlignFar,
+												Format:     "%d",
+												Width:      40,
+											},
+											TableViewColumn{
+												DataMember: "Height",
+												Alignment:  AlignFar,
+												Format:     "%d",
+												Width:      40,
+											},
+										},
+										Model: tableModel,
+										OnCurrentIndexChanged:    Mw.OnTableCurrentIndexChanged,
+										OnSelectedIndexesChanged: Mw.OnTableSelectedIndexesChanged,
 									},
 								},
-								Model: tableModel,
-								OnCurrentIndexChanged:    Mw.OnTableCurrentIndexChanged,
-								OnSelectedIndexesChanged: Mw.OnTableSelectedIndexesChanged,
+							},
+							Composite{
+								AssignTo: &cmp2,
+								Layout:   VBox{},
 							},
 						},
 					},
@@ -638,6 +678,15 @@ func main() {
 	}
 
 	Mw.Closing().Attach(Mw.onAppClose)
+
+	Mw.hSplitter.SetFixed(ts1, true)
+
+	brs, _ := walk.NewSolidColorBrush(walk.RGB(195, 200, 205))
+	cmp1.SetBackground(brs)
+
+	brs, _ = walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+	lbl1.SetBackground(brs)
+	cmp2.SetBackground(brs)
 
 	sbr := Mw.StatusBar()
 	sbr.SetVisible(true)
@@ -707,16 +756,6 @@ func main() {
 
 	Mw.treeMenu = menu
 
-	//apply settings
-	//	if s, ok := settings.Get("ThumbViewWidth"); ok {
-	//		w, _ := strconv.Atoi(s)
-	//		if w > 0 {
-	//			if w > 800 {
-	//				w = 400
-	//			}
-	//			Mw.hSplitter.SetWidgetWidth(Mw.viewBase, w)
-	//		}
-	//	}
 	if s, ok := settings.Get("Cached"); ok {
 		b, _ := strconv.ParseBool(s)
 		Mw.thumbView.SetCacheMode(b)
@@ -724,14 +763,14 @@ func main() {
 	w, h := 120, 75
 	if s, ok := settings.Get("ThumbW"); ok {
 		w, _ = strconv.Atoi(s)
-		if w < 120 {
-			w = 120
+		if w < 64 {
+			w = 64
 		}
 	}
 	if s, ok := settings.Get("ThumbH"); ok {
 		h, _ = strconv.Atoi(s)
-		if h < 75 {
-			h = 75
+		if h < 40 {
+			h = 40
 		}
 	}
 	Mw.thumbView.SetItemSize(w, h)
@@ -740,6 +779,15 @@ func main() {
 		idx, _ := strconv.Atoi(s)
 
 		Mw.thumbView.SetLayoutMode(idx)
+	}
+
+	if s, ok := settings.Get("SortMode"); ok {
+		idx, _ := strconv.Atoi(s)
+		ord := 0
+		if s, ok = settings.Get("SortOrder"); ok {
+			ord, _ = strconv.Atoi(s)
+		}
+		Mw.thumbView.SetSortMode(idx, ord)
 	}
 
 	if s, ok := settings.Get("LastAddress"); ok {
@@ -762,6 +810,8 @@ func main() {
 	settings.Put("ThumbH", strconv.Itoa(Mw.thumbView.itemSize.th))
 	settings.Put("Cached", strconv.FormatBool(Mw.thumbView.doCache))
 	settings.Put("LayoutMode", strconv.Itoa(Mw.thumbView.GetLayoutMode()))
+	settings.Put("SortMode", strconv.Itoa(Mw.thumbView.GetSortMode()))
+	settings.Put("SortOrder", strconv.Itoa(Mw.thumbView.GetSortOrder()))
 	settings.Put(tableModel.dirPath, strconv.Itoa(Mw.thumbView.viewInfo.topPos))
 
 	if err := settings.Save(); err != nil {
@@ -778,7 +828,7 @@ func (mw *MyMainWindow) imageProcessStatusHandler(i int) {
 }
 func (mw *MyMainWindow) imageProcessInfoHandler(numjob int, d float64) {
 	mw.Synchronize(func() {
-		mw.MainWindow.SetTitle(tableModel.dirPath + " (" + strconv.Itoa(numjob) + " files) in " + strconv.FormatFloat(d, 'f', 3, 64))
+		//mw.MainWindow.SetTitle(tableModel.dirPath + " (" + strconv.Itoa(numjob) + " files) in " + strconv.FormatFloat(d, 'f', 3, 64))
 
 		mw.StatusBar().Items().At(0).SetText("  " + strconv.Itoa(numjob) + " files")
 		mw.StatusBar().Items().At(1).SetText(strconv.FormatFloat(d, 'f', 3, 64) + " s")
