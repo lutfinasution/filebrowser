@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"image"
-	//"log"
 	"math"
 )
 
@@ -25,6 +24,8 @@ type ImageViewer struct {
 	ImageName   string
 	imagelist   *FileInfoModel
 	imageBuffer *drawBuffer
+
+	OnViewImage func(idx int)
 }
 
 func NewImageViewer(mainWindow *walk.MainWindow, parent walk.Container, imageName string, imgList *FileInfoModel) (*ImageViewer, error) {
@@ -121,23 +122,23 @@ func NewImageViewer(mainWindow *walk.MainWindow, parent walk.Container, imageNam
 	return w, nil
 }
 
-func (mw *ImageViewer) getCurrentImageInfo() string {
-	if mw.imagelist == nil {
+func (imv *ImageViewer) getCurrentImageInfo() string {
+	if imv.imagelist == nil {
 		return ""
 	}
 
-	for i, v := range mw.imagelist.items {
-		if mw.imagelist.getFullPath(i) == mw.ImageName {
+	for i, v := range imv.imagelist.items {
 
+		if imv.imagelist.getFullPath(i) == imv.ImageName {
 			info0 := v.Name
 			info1 := fmt.Sprintf("    %d x %d, %d KB", v.Width, v.Height, v.Size/1024)
 			info2 := v.Modified.Format("    Jan 2, 2006 3:04pm")
 			info3 := ""
-			if mw.imageBuffer != nil {
-				if mw.imageBuffer.zoom == 0 {
+			if imv.imageBuffer != nil {
+				if imv.imageBuffer.zoom == 0 {
 					info3 = "   (fit display)"
 				} else {
-					info3 = fmt.Sprintf("   (%6.2fX zoom)", mw.imageBuffer.zoom)
+					info3 = fmt.Sprintf("   (%6.2fX zoom)", imv.imageBuffer.zoom)
 				}
 			}
 			return info0 + info1 + info2 + info3
@@ -147,32 +148,39 @@ func (mw *ImageViewer) getCurrentImageInfo() string {
 	return ""
 }
 
-func (mw *ImageViewer) getNextImage() string {
-	if mw.imagelist == nil {
+func (imv *ImageViewer) getNextImage() string {
+	if imv.imagelist == nil {
 		return ""
 	}
 
-	for i, _ := range mw.imagelist.items {
-		if mw.imagelist.getFullPath(i) == mw.ImageName {
-			if i+1 < len(mw.imagelist.items) {
-				mw.ImageName = mw.imagelist.getFullPath(i + 1)
-				return mw.imagelist.getFullPath(i + 1)
+	for i, _ := range imv.imagelist.items {
+		if imv.imagelist.getFullPath(i) == imv.ImageName {
+			if i+1 < len(imv.imagelist.items) {
+				if imv.OnViewImage != nil {
+					imv.OnViewImage(i + 1)
+				}
+				imv.ImageName = imv.imagelist.getFullPath(i + 1)
+				return imv.ImageName
 			}
 		}
 	}
 
 	return ""
 }
-func (mw *ImageViewer) getPrevImage() string {
-	if mw.imagelist == nil {
+func (imv *ImageViewer) getPrevImage() string {
+	if imv.imagelist == nil {
 		return ""
 	}
 
-	for i, _ := range mw.imagelist.items {
-		if mw.imagelist.getFullPath(i) == mw.ImageName {
+	for i, _ := range imv.imagelist.items {
+		if imv.imagelist.getFullPath(i) == imv.ImageName {
 			if i-1 > 0 {
-				mw.ImageName = mw.imagelist.getFullPath(i - 1)
-				return mw.imagelist.getFullPath(i - 1)
+				if imv.OnViewImage != nil {
+					imv.OnViewImage(i - 1)
+				}
+
+				imv.ImageName = imv.imagelist.getFullPath(i - 1)
+				return imv.ImageName
 			}
 		}
 	}
@@ -180,139 +188,139 @@ func (mw *ImageViewer) getPrevImage() string {
 	return ""
 }
 
-func (mw *ImageViewer) setStatusText() {
-	sb := mw.MainWindow.StatusBar()
+func (imv *ImageViewer) setStatusText() {
+	sb := imv.MainWindow.StatusBar()
 
 	if sb.Visible() {
 		cvs, _ := sb.CreateCanvas()
 
 		cvs.FillRectangle(sb.Background(), sb.ClientBounds())
 
-		stxt := mw.getCurrentImageInfo()
+		stxt := imv.getCurrentImageInfo()
 		cvs.DrawText(stxt, sb.Font(), walk.RGB(200, 200, 200), sb.ClientBounds(),
 			walk.TextCenter|walk.TextVCenter|walk.TextSingleLine)
 
 		cvs.Dispose()
 	}
 
-	cvs, _ := mw.topComposite.CreateCanvas()
+	cvs, _ := imv.topComposite.CreateCanvas()
 
-	r := mw.cmbZoom.Bounds()
+	r := imv.cmbZoom.Bounds()
 	r.X -= 140
 	r.Width = 80
-	cvs.FillRectangle(mw.topComposite.Background(), r)
-	cvs.DrawText("Zoom: ", mw.topComposite.Font(), walk.RGB(210, 210, 210), r,
+	cvs.FillRectangle(imv.topComposite.Background(), r)
+	cvs.DrawText("Zoom: ", imv.topComposite.Font(), walk.RGB(210, 210, 210), r,
 		walk.TextRight|walk.TextVCenter|walk.TextSingleLine)
 
 	cvs.Dispose()
 }
-func (mw *ImageViewer) onImgNext() {
-	if mw.imageBuffer != nil {
-		fnext := mw.getNextImage()
+func (imv *ImageViewer) onImgNext() {
+	if imv.imageBuffer != nil {
+		fnext := imv.getNextImage()
 		if fnext != "" {
-			mw.loadImageToBuffer(fnext)
-			mw.repaint()
-			mw.viewBase.SetFocus()
+			imv.loadImageToBuffer(fnext)
+			imv.repaint()
+			imv.viewBase.SetFocus()
 		}
 	}
 }
-func (mw *ImageViewer) onImgPrev() {
-	if mw.imageBuffer != nil {
-		fprev := mw.getPrevImage()
+func (imv *ImageViewer) onImgPrev() {
+	if imv.imageBuffer != nil {
+		fprev := imv.getPrevImage()
 		if fprev != "" {
-			mw.loadImageToBuffer(fprev)
-			mw.repaint()
-			mw.viewBase.SetFocus()
+			imv.loadImageToBuffer(fprev)
+			imv.repaint()
+			imv.viewBase.SetFocus()
 		}
 	}
 }
-func (mw *ImageViewer) onZoomInc() {
-	if mw.imageBuffer != nil {
-		if mw.imageBuffer.zoom == 0 {
-			zoomNow := float64(mw.imageBuffer.zoomSize().Width) / float64(mw.imageBuffer.size.Width)
-			mw.imageBuffer.zoom = 0.25 * math.Ceil((100*zoomNow)/(100*0.25))
+func (imv *ImageViewer) onZoomInc() {
+	if imv.imageBuffer != nil {
+		if imv.imageBuffer.zoom == 0 {
+			zoomNow := float64(imv.imageBuffer.zoomSize().Width) / float64(imv.imageBuffer.size.Width)
+			imv.imageBuffer.zoom = 0.25 * math.Ceil((100*zoomNow)/(100*0.25))
 		} else {
-			mw.imageBuffer.zoom += 0.25
+			imv.imageBuffer.zoom += 0.25
 		}
-		mw.repaint()
+		imv.repaint()
 
-		mw.cmbZoom.SetCurrentIndex(-1)
-		mw.setStatusText()
-		mw.viewBase.SetFocus()
+		imv.cmbZoom.SetCurrentIndex(-1)
+		imv.setStatusText()
+		imv.viewBase.SetFocus()
 	}
 }
-func (mw *ImageViewer) onZoomDec() {
-	if mw.imageBuffer != nil {
-		newZoom := mw.imageBuffer.zoom - 0.25
-		sizeZoom := mw.imageBuffer.zoomSizeAt(newZoom)
-		sizeFit := mw.imageBuffer.fitSize()
+func (imv *ImageViewer) onZoomDec() {
+	if imv.imageBuffer != nil {
+		newZoom := imv.imageBuffer.zoom - 0.25
+		sizeZoom := imv.imageBuffer.zoomSizeAt(newZoom)
+		sizeFit := imv.imageBuffer.fitSize()
 
 		if sizeZoom.Width > sizeFit.Width || sizeZoom.Height > sizeFit.Height {
-			mw.imageBuffer.zoom -= 0.25
+			imv.imageBuffer.zoom -= 0.25
 
 		} else {
-			mw.imageBuffer.zoom = 0
+			imv.imageBuffer.zoom = 0
 		}
 
-		mw.repaint()
-		mw.cmbZoom.SetCurrentIndex(-1)
-		mw.setStatusText()
-		mw.viewBase.SetFocus()
+		imv.repaint()
+		imv.cmbZoom.SetCurrentIndex(-1)
+		imv.setStatusText()
+		imv.viewBase.SetFocus()
 	}
 }
-func (mw *ImageViewer) onSizeChanged() {
-	if mw.imageBuffer != nil {
-		mw.imageBuffer.viewinfo.viewRect = image.Rect(0, 0, mw.viewBase.Width(), mw.viewBase.Height())
+func (imv *ImageViewer) onSizeChanged() {
+	if imv.imageBuffer != nil {
+		imv.imageBuffer.viewinfo.viewRect = image.Rect(0, 0, imv.viewBase.Width(), imv.viewBase.Height())
 	}
 }
 
-func (mw *ImageViewer) onMouseWheel(x, y int, btn walk.MouseButton) {
+func (imv *ImageViewer) onMouseWheel(x, y int, btn walk.MouseButton) {
 
 	// scroll direction
 	d := int(int32(btn) >> 16)
 	b := int(int32(btn) & 0xFFFF)
 
-	if mw.imageBuffer != nil {
+	if imv.imageBuffer != nil {
 		if d < 0 {
 			if b == int(walk.RightButton) {
-				mw.onZoomInc()
+				imv.onZoomInc()
 			} else {
-				mw.onImgNext()
+				imv.onImgNext()
 			}
 		} else {
 			if b == int(walk.RightButton) {
-				mw.onZoomDec()
+				imv.onZoomDec()
 			} else {
-				mw.onImgPrev()
+				imv.onImgPrev()
 			}
 		}
 	}
 }
 
-func (mw *ImageViewer) onMouseDown(x, y int, btn walk.MouseButton) {
-	if mw.imageBuffer != nil {
+func (imv *ImageViewer) onMouseDown(x, y int, btn walk.MouseButton) {
+	if imv.imageBuffer != nil {
 		if btn == walk.LeftButton {
-			mw.imageBuffer.viewinfo.mouseposX = x
-			mw.imageBuffer.viewinfo.mouseposY = y
+			imv.imageBuffer.viewinfo.mouseposX = x
+			imv.imageBuffer.viewinfo.mouseposY = y
 		}
 	}
-	mw.viewBase.SetFocus()
+	imv.viewBase.SetFocus()
 }
-func (mw *ImageViewer) onMouseMove(x, y int, btn walk.MouseButton) {
+func (imv *ImageViewer) onMouseMove(x, y int, btn walk.MouseButton) {
 
-	if mw.imageBuffer == nil || btn != walk.LeftButton {
+	if imv.imageBuffer == nil || btn != walk.LeftButton {
 		return
 	}
 
-	vi := &mw.imageBuffer.viewinfo
+	vi := &imv.imageBuffer.viewinfo
 
-	if mw.imageBuffer.canPan() == false || vi.currentPos == nil {
+	if imv.imageBuffer.canPan() == false || vi.currentPos == nil {
 		return
 	}
 
 	canMove := false
 
-	if mw.imageBuffer.canPanX() {
+	if imv.imageBuffer.canPanX() {
 		if x-vi.mouseposX > 0 {
 			//prevent L-R panning
 			if vi.currentPos.X > 0 {
@@ -320,14 +328,14 @@ func (mw *ImageViewer) onMouseMove(x, y int, btn walk.MouseButton) {
 			}
 		} else {
 			//prevent R-L panning
-			if vi.currentPos.X+mw.imageBuffer.zoomSize().Width < vi.viewRect.Dx() {
+			if vi.currentPos.X+imv.imageBuffer.zoomSize().Width < vi.viewRect.Dx() {
 				return
 			}
 		}
 		canMove = true
 		vi.mousemoveX = x - vi.mouseposX
 	}
-	if mw.imageBuffer.canPanY() {
+	if imv.imageBuffer.canPanY() {
 		if y-vi.mouseposY > 0 {
 			//prevent U-D panning
 			if vi.currentPos.Y > 0 {
@@ -335,7 +343,7 @@ func (mw *ImageViewer) onMouseMove(x, y int, btn walk.MouseButton) {
 			}
 		} else {
 			//prevent D-U panning
-			if vi.currentPos.Y+mw.imageBuffer.zoomSize().Height < vi.viewRect.Dy() {
+			if vi.currentPos.Y+imv.imageBuffer.zoomSize().Height < vi.viewRect.Dy() {
 				return
 			}
 		}
@@ -344,48 +352,48 @@ func (mw *ImageViewer) onMouseMove(x, y int, btn walk.MouseButton) {
 	}
 
 	if canMove {
-		mw.repaint()
+		imv.repaint()
 	}
 }
-func (mw *ImageViewer) onMouseUp(x, y int, btn walk.MouseButton) {
-	if mw.imageBuffer != nil {
-		if mw.imageBuffer.canPan() {
-			vi := &mw.imageBuffer.viewinfo
+func (imv *ImageViewer) onMouseUp(x, y int, btn walk.MouseButton) {
+	if imv.imageBuffer != nil {
+		if imv.imageBuffer.canPan() {
+			vi := &imv.imageBuffer.viewinfo
 
-			vi.offsetX += int(math.Ceil(float64(vi.mousemoveX) / mw.imageBuffer.zoom))
-			vi.offsetY += int(math.Ceil(float64(vi.mousemoveY) / mw.imageBuffer.zoom))
+			vi.offsetX += int(math.Ceil(float64(vi.mousemoveX) / imv.imageBuffer.zoom))
+			vi.offsetY += int(math.Ceil(float64(vi.mousemoveY) / imv.imageBuffer.zoom))
 
 			vi.mousemoveX = 0
 			vi.mousemoveY = 0
 			vi.mouseposX = 0
 			vi.mouseposY = 0
 
-			mw.repaint()
+			imv.repaint()
 		}
 	}
 }
 
-func (mw *ImageViewer) onPaint(canvas *walk.Canvas, updateRect walk.Rectangle) error {
-	if mw.imageBuffer != nil {
-		DrawImage(mw.ImageName, mw.imageBuffer, canvas)
+func (imv *ImageViewer) onPaint(canvas *walk.Canvas, updateRect walk.Rectangle) error {
+	if imv.imageBuffer != nil {
+		DrawImage(imv.ImageName, imv.imageBuffer, canvas)
 
-		mw.setStatusText()
+		imv.setStatusText()
 	}
 	return nil
 }
-func (mw *ImageViewer) repaint() {
-	if mw.imageBuffer != nil {
-		canvas, _ := mw.viewBase.CreateCanvas()
+func (imv *ImageViewer) repaint() {
+	if imv.imageBuffer != nil {
+		canvas, _ := imv.viewBase.CreateCanvas()
 
-		DrawImage(mw.ImageName, mw.imageBuffer, canvas)
+		DrawImage(imv.ImageName, imv.imageBuffer, canvas)
 
 		canvas.Dispose()
 
-		mw.setStatusText()
+		imv.setStatusText()
 	}
 }
 
-func (mw *ImageViewer) onZoomChanged() {
+func (imv *ImageViewer) onZoomChanged() {
 	//							"Actual size",
 	//							"Fit display",
 	//							"Zoom 1.25x",
@@ -399,50 +407,50 @@ func (mw *ImageViewer) onZoomChanged() {
 	//							"Zoom out 3x",
 	//							"Zoom out 4x",
 	//							"Zoom out 5x",
-	if mw.imageBuffer == nil {
+	if imv.imageBuffer == nil {
 		return
 	}
 
-	switch mw.cmbZoom.CurrentIndex() {
+	switch imv.cmbZoom.CurrentIndex() {
 	case 0:
-		mw.imageBuffer.zoom = 0
+		imv.imageBuffer.zoom = 0
 	case 1:
-		mw.imageBuffer.zoom = 1.0
+		imv.imageBuffer.zoom = 1.0
 	case 2:
-		mw.imageBuffer.zoom = 1.25
+		imv.imageBuffer.zoom = 1.25
 	case 3:
-		mw.imageBuffer.zoom = 1.50
+		imv.imageBuffer.zoom = 1.50
 	case 4:
-		mw.imageBuffer.zoom = 2.0
+		imv.imageBuffer.zoom = 2.0
 	case 5:
-		mw.imageBuffer.zoom = 3.0
+		imv.imageBuffer.zoom = 3.0
 	case 6:
-		mw.imageBuffer.zoom = 4.0
+		imv.imageBuffer.zoom = 4.0
 	case 7:
-		mw.imageBuffer.zoom = 5.0
+		imv.imageBuffer.zoom = 5.0
 	case 8:
-		mw.imageBuffer.zoom = 10.0
+		imv.imageBuffer.zoom = 10.0
 	case 9:
-		mw.imageBuffer.zoom = 0.5
+		imv.imageBuffer.zoom = 0.5
 	case 10:
-		mw.imageBuffer.zoom = 0.33
+		imv.imageBuffer.zoom = 0.33
 	case 11:
-		mw.imageBuffer.zoom = 0.25
+		imv.imageBuffer.zoom = 0.25
 	case 12:
-		mw.imageBuffer.zoom = 0.20
+		imv.imageBuffer.zoom = 0.20
 	}
 
-	mw.repaint()
+	imv.repaint()
 
-	if mw.imageBuffer.canPan() {
-		mw.viewBase.SetCursor(walk.CursorSizeAll())
+	if imv.imageBuffer.canPan() {
+		imv.viewBase.SetCursor(walk.CursorSizeAll())
 	} else {
-		mw.viewBase.SetCursor(walk.CursorArrow())
+		imv.viewBase.SetCursor(walk.CursorArrow())
 	}
-	defer mw.viewBase.SetFocus()
+	defer imv.viewBase.SetFocus()
 }
 
-func (mw *ImageViewer) loadImageToBuffer(imgName string) bool {
+func (imv *ImageViewer) loadImageToBuffer(imgName string) bool {
 	//-----------------------------------------
 	// load full size image to draw buffer
 	//-----------------------------------------
@@ -452,28 +460,28 @@ func (mw *ImageViewer) loadImageToBuffer(imgName string) bool {
 	img := processImageData(nil, imgName, false, &walk.Size{w, h})
 
 	if img != nil {
-		if mw.imageBuffer == nil {
-			mw.imageBuffer = NewDrawBuffer(w, h)
+		if imv.imageBuffer == nil {
+			imv.imageBuffer = NewDrawBuffer(w, h)
 		} else {
-			lastzoom := mw.imageBuffer.zoom
+			lastzoom := imv.imageBuffer.zoom
 
-			DeleteDrawBuffer(mw.imageBuffer)
-			mw.imageBuffer = NewDrawBuffer(w, h)
+			DeleteDrawBuffer(imv.imageBuffer)
+			imv.imageBuffer = NewDrawBuffer(w, h)
 
-			mw.imageBuffer.zoom = lastzoom
+			imv.imageBuffer.zoom = lastzoom
 		}
-		drawImageRGBAToDIB(nil, img, mw.imageBuffer, 0, 0, w, h)
+		drawImageRGBAToDIB(nil, img, imv.imageBuffer, 0, 0, w, h)
 
-		mw.imageBuffer.viewinfo.viewRect = image.Rect(0, 0, mw.viewBase.Width(), mw.viewBase.Height())
+		imv.imageBuffer.viewinfo.viewRect = image.Rect(0, 0, imv.viewBase.Width(), imv.viewBase.Height())
 
-		mw.setStatusText()
+		imv.setStatusText()
 	}
 	return true
 }
 
-func (mw *ImageViewer) Close() bool {
+func (imv *ImageViewer) Close() bool {
 
-	DeleteDrawBuffer(mw.imageBuffer)
+	DeleteDrawBuffer(imv.imageBuffer)
 
 	return true
 }

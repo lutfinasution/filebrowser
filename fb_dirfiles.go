@@ -26,7 +26,8 @@ type FileInfo struct {
 	dbsynched      bool
 	Width, Height  int
 	thumbW, thumbH int
-	LastState      string
+	ModState       string
+	Info           string
 	drawRect       walk.Rectangle
 	Imagedata      []byte
 }
@@ -37,10 +38,9 @@ func (f FileInfo) HasData() bool {
 
 type FileInfoModel struct {
 	walk.SortedReflectTableModelBase
-	viewer    *ScrollViewer
-	sortOrder walk.SortOrder
-	dirPath   string
-	items     []*FileInfo
+	viewer  *ScrollViewer
+	dirPath string
+	items   []*FileInfo
 }
 
 func NewFileInfoModel() *FileInfoModel {
@@ -49,7 +49,28 @@ func NewFileInfoModel() *FileInfoModel {
 }
 
 func (f FileInfoModel) getFullPath(idx int) string {
-	return filepath.Join(f.dirPath, f.items[idx].Name)
+
+	v := f.items[idx]
+
+	if v.Info == "" {
+		return filepath.Join(f.dirPath, v.Name)
+	} else {
+		return filepath.Join(v.Info, v.Name)
+	}
+}
+
+func (f FileInfoModel) getFullItemPath(item *FileInfo) string {
+
+	for _, v := range f.items {
+		if v == item {
+			if v.Info == "" {
+				return filepath.Join(f.dirPath, v.Name)
+			} else {
+				return filepath.Join(v.Info, v.Name)
+			}
+		}
+	}
+	return ""
 }
 func (m *FileInfoModel) Items() interface{} {
 	return m.items
@@ -243,13 +264,13 @@ func (dm *DirectoryMonitor) FSsetNewItem(mkey string) {
 			v.Height = imgInfo.Height
 		} else {
 			dm.viewer.ItemsMap[mkey] = &FileInfo{
-				Name:      name,
-				Size:      info.Size(),
-				Modified:  info.ModTime(),
-				Type:      imgType,
-				Width:     imgInfo.Width,
-				Height:    imgInfo.Height,
-				LastState: "",
+				Name:     name,
+				Size:     info.Size(),
+				Modified: info.ModTime(),
+				Type:     imgType,
+				Width:    imgInfo.Width,
+				Height:   imgInfo.Height,
+				ModState: "",
 				//Changed:   true,
 			}
 			//adding new item to list
@@ -335,7 +356,7 @@ loop:
 		log.Println("processWatcher found", len(dm.watchmap))
 
 		for k, v := range dm.watchmap {
-			switch v.LastState {
+			switch v.ModState {
 			case "modify", "create":
 				dm.FSsetNewItem(k)
 			case "remove":
@@ -442,7 +463,7 @@ func (dm *DirectoryMonitor) setFolderWatcher(watchpath string) {
 						dm.watchmap = make(ItmMap)
 					}
 
-					dm.watchmap[event.Name] = &FileInfo{Name: event.Name, LastState: evType}
+					dm.watchmap[event.Name] = &FileInfo{Name: event.Name, ModState: evType}
 
 					if !dm.activeproc {
 						dm.activeproc = true

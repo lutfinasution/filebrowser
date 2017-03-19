@@ -22,9 +22,9 @@ import (
 	"github.com/lxn/win"
 )
 
-var _ walk.TreeItem = new(Directory)
-var _ walk.TreeModel = new(DirectoryTreeModel)
-var _ walk.ReflectTableModel = new(FileInfoModel)
+//var _ walk.TreeItem = new(Directory)
+//var _ walk.TreeModel = new(DirectoryTreeModel)
+//var _ walk.ReflectTableModel = new(FileInfoModel)
 var Mw = new(MyMainWindow)
 var treeView *walk.TreeView
 var treeModel *DirectoryTreeModel
@@ -38,6 +38,11 @@ type tviews struct {
 	viewer  *ScrollViewer
 	handler *walk.Action
 }
+type albumInfo struct {
+	id   int
+	name string
+	desc string
+}
 
 type MyMainWindow struct {
 	*walk.MainWindow
@@ -45,6 +50,9 @@ type MyMainWindow struct {
 	hSplitter       *walk.Splitter
 	viewBase        *walk.Composite
 	thumbView       *ScrollViewer
+	albumView       *ScrollViewer
+	compAlbum       *walk.Composite
+	compFolder      *walk.Composite
 	thumbViews      []tviews
 	btn1            *walk.PushButton
 	paintWidgetMenu *walk.Menu
@@ -66,6 +74,9 @@ type MyMainWindow struct {
 	menuView2       *walk.Action
 	menuView3       *walk.Action
 	menuView4       *walk.Action
+	albuminfo       *albumInfo
+	visibleAlbum    bool
+	visibleFolder   bool
 }
 
 var testrun1 = false
@@ -163,6 +174,112 @@ func (mw *MyMainWindow) onMenuActionReload() {
 
 	mw.thumbView.itemsModel.SetDirPath(mw.thumbView.itemsModel.dirPath, true)
 }
+
+func (mw *MyMainWindow) albumShow(bShow bool) {
+	if !bShow {
+		hdr2.SetBackground(cmp00.Background())
+		mw.compAlbum.SetVisible(false)
+		mw.compAlbum.SetHeight(1)
+	} else {
+		if !mw.compAlbum.Visible() {
+			hdr2.SetBackground(brs)
+			mw.compAlbum.SetVisible(true)
+			mw.compAlbum.SetMinMaxSize(walk.Size{0, 180}, walk.Size{0, 0})
+		}
+		if mw.compAlbum.Children().Len() == 0 {
+			mw.albumView, _ = NewScrollViewer(mw.MainWindow, mw.compAlbum, false, 0, 100, 63)
+
+			//tvw.SetEventMouseDown(Mw.onThumbViewMouseDn)
+			mw.albumView.SetItemSize(100, 63)
+			mw.albumView.OnAlbumEditing = mw.albumStartEdit
+			mw.albumView.OnSelectionChanged = mw.albumSelChange
+		}
+		mw.albumView.RunAlbum()
+
+		cmp00.Layout().Update(false)
+	}
+
+	cmp00.SendMessage(win.WM_SIZE, 0, 0)
+	cmp00.SizeChanged()
+
+	mw.visibleAlbum = bShow
+}
+func (mw *MyMainWindow) albumSelChange() {
+	// send mw.thumbView as target thumbview to
+	// render the album items.
+
+	mw.albumView.AlbumEnumItems(mw.thumbView)
+}
+func (mw *MyMainWindow) albumStartEdit(id int, name string, desc string) {
+
+	hdr3.SetBackground(brs)
+	cmp03.SetVisible(true)
+
+	mw.albumView.SetEnabled(false)
+	mw.albuminfo = &albumInfo{id: id, name: name, desc: desc}
+
+	albumData1.SetText(name)
+	albumData2.SetText(desc)
+
+	cmp00.SendMessage(win.WM_SIZE, 0, 0)
+	cmp00.SizeChanged()
+}
+func (mw *MyMainWindow) albumCancel() {
+	mw.albumView.SetEnabled(true)
+}
+func (mw *MyMainWindow) albumSaveEdit() bool {
+
+	if mw.albumView != nil {
+		info := FileInfo{index: -1, Name: albumData1.Text(), Info: albumData2.Text()}
+		if mw.albuminfo != nil {
+			info.index = mw.albuminfo.id
+		}
+
+		res, _ := mw.albumView.AlbumDBUpdateItem(&info)
+		if res > 0 {
+			albumData1.SetText("")
+			albumData2.SetText("")
+
+			mw.albumView.RunAlbum()
+
+			if mw.albuminfo != nil {
+				mw.albuminfo = nil
+			}
+			mw.albumView.SetEnabled(true)
+			return true
+		}
+	}
+	return false
+}
+func (mw *MyMainWindow) onMenuActionAlbumAdd() {
+	//Display album frame
+
+	mw.albumShow(true)
+
+	if mw.albumView.SelectedIndex != -1 {
+		mw.albumView.AlbumAddItems(mw.thumbView)
+		mw.albumView.RunAlbum()
+	} else {
+		walk.MsgBox(mw, "Add to Album", "Please select an album first",
+			walk.MsgBoxOK|walk.MsgBoxIconInformation)
+	}
+
+}
+func (mw *MyMainWindow) onMenuActionAlbumDel() {
+	// Delete items fro album
+
+	mw.albumShow(true)
+
+	if mw.albumView.SelectedIndex != -1 {
+		mw.albumView.AlbumDelItems(mw.thumbView)
+		mw.albumView.RunAlbum()
+	} else {
+		walk.MsgBox(mw, "Remove from Album", "Please select an album first",
+			walk.MsgBoxOK|walk.MsgBoxIconInformation)
+	}
+
+}
+
 func (mw *MyMainWindow) onMenuActionPreview() {
 	//Display full image preview
 	mw.thumbView.ShowPreviewFull()
@@ -270,7 +387,7 @@ func (mw *MyMainWindow) onMenuView3() {
 	if len(mw.thumbViews) == 2 { //allow only 3 total
 		return
 	}
-	tvw, _ := NewScrollViewer(Mw.MainWindow, Mw.viewBase, nil, 0, 0, 0)
+	tvw, _ := NewScrollViewer(Mw.MainWindow, Mw.viewBase, true, 0, 0, 0)
 
 	tvw.SetImageProcessorStatusFunc(Mw.imageProcessStatusHandler)
 	tvw.SetImageProcessorInfoFunc(Mw.imageProcessInfoHandler)
@@ -336,7 +453,9 @@ func (mw *MyMainWindow) onThumbViewMouseDn(x, y int, button walk.MouseButton) {
 		bounds.Min.Y = bounds.Max.Y - 32
 	}
 
-	mw.StatusBar().Items().At(2).SetText("  " + mw.thumbView.GetItemName(idx) + "   " + mw.thumbView.GetItemInfo(idx))
+	mw.StatusBar().Items().At(2).SetText(" " + strconv.Itoa(len(mw.thumbView.selections)) + " selected   " +
+		mw.thumbView.GetItemName(idx) +
+		"   " + mw.thumbView.GetItemInfo(idx))
 
 	if mw.thumbView.isValidIndex(idx) {
 		// popup the ctx menu, depending on the mouse x,y in the
@@ -354,22 +473,6 @@ func (mw *MyMainWindow) onThumbViewMouseDn(x, y int, button walk.MouseButton) {
 	}
 }
 
-func (mw *MyMainWindow) onTableColClick(n int) {
-	mw.thumbView.Invalidate()
-}
-func (mw *MyMainWindow) OnTableSelectedIndexesChanged() {
-	//fmt.Printf("SelectedIndexes: %v\n", tableView.SelectedIndexes())
-}
-func (mw *MyMainWindow) OnTableCurrentIndexChanged() {
-	var url string
-	if index := tableView.CurrentIndex(); index > -1 {
-		name := tableModel.items[index].Name
-
-		dir := tableModel.dirPath
-		url = filepath.Join(dir, name)
-	}
-	Mw.MainWindow.SetTitle(url)
-}
 func (mw *MyMainWindow) onToolbarSizeChanged() {
 	if mw.btnOptions != nil {
 		mw.btnOptions.SetBounds(walk.Rectangle{mw.topComposite.Bounds().Width - 42, 7, 40, 28})
@@ -414,8 +517,10 @@ func (mw *MyMainWindow) onAppClose(canceled *bool, reason walk.CloseReason) {
 	//mw.MainWindow.Close()
 }
 
-var ts1, ts2 *walk.Splitter
-var cmp1, cmp2 *walk.Composite
+var cmp00, cmp03 *walk.Composite
+var hdr1, hdr2, hdr3 *walk.Composite
+var brs *walk.SolidColorBrush
+var albumData1, albumData2 *walk.TextEdit
 
 func main() {
 	var err error
@@ -444,6 +549,11 @@ func main() {
 
 	myFont := *new(Font)
 	myFont.PointSize = 10
+	myFont2 := *new(Font)
+	myFont2.PointSize = 10
+	myFont2.Bold = true
+
+	brs, _ = walk.NewSolidColorBrush(walk.RGB(195, 200, 205))
 
 	if err := (MainWindow{
 		AssignTo: &Mw.MainWindow,
@@ -538,14 +648,6 @@ func main() {
 			},
 		},
 		Children: []Widget{
-			//CustomWidget{
-			//				AssignTo:         &Mw.toolbar,
-			//				ClearsBackground: true,
-			//				//InvalidatesOnResize: true,
-			//				//Paint:               Mw.onDrawPanel,
-			//				MaxSize:     Size{2, 48},
-			//				OnMouseDown: Mw.OnToolbarClick,
-
 			Composite{
 				Layout:        Grid{Columns: 3},
 				AssignTo:      &Mw.topComposite,
@@ -567,31 +669,50 @@ func main() {
 				},
 			},
 			HSplitter{
+				AssignTo:    &Mw.hSplitter,
 				Name:        "mainSplitter",
 				HandleWidth: 6,
-				AssignTo:    &Mw.hSplitter,
-
 				Children: []Widget{
-					VSplitter{
-						HandleWidth: 6,
-						Name:        "leftbarSplitter",
-						AssignTo:    &ts1,
+					Composite{
+						Layout:   VBox{Margins: Margins{0, 1, 4, 1}},
+						Name:     "leftbar",
+						AssignTo: &cmp00,
+						OnSizeChanged: func() {
+
+							if cmp03.Visible() {
+								cmp03.SetMinMaxSize(walk.Size{0, 120}, walk.Size{0, 120})
+							}
+							if Mw.compAlbum.Visible() {
+								b := cmp00.ClientBounds()
+								Mw.compAlbum.SetMinMaxSize(walk.Size{0, b.Height - Mw.compAlbum.Bounds().Top() - 7},
+									walk.Size{0, 0})
+							}
+
+						},
 						Children: []Widget{
 							Composite{
-								AssignTo: &cmp1,
+								AssignTo: &hdr1,
+								Name:     "leftbar-header1",
 								Layout:   HBox{Margins: Margins{4, 1, 4, 1}},
 								MinSize:  Size{0, 24},
 								MaxSize:  Size{0, 24},
-								OnMouseDown: func(x, y int, mb walk.MouseButton) {
-									//ts2.SetVisible(!ts2.Visible())
-									h := ts2.Height()
-									ts2.SetHeight(0)
-									cmp2.SetY(cmp2.Y() - h)
-									cmp2.SetHeight(cmp2.Height() + h)
-									ts1.SaveState()
-									//ts1.Layout().Update(false)
-								},
 								Children: []Widget{
+									ToolButton{Text: "-",
+										OnMouseUp: func(x, y int, mb walk.MouseButton) {
+											if Mw.compFolder.Visible() {
+												hdr1.SetBackground(cmp00.Background())
+												Mw.compFolder.SetVisible(false)
+												Mw.compFolder.SetHeight(1)
+											} else {
+												hdr1.SetBackground(brs)
+												Mw.compFolder.SetVisible(true)
+											}
+
+											Mw.visibleFolder = Mw.compFolder.Visible()
+
+											cmp00.SendMessage(win.WM_SIZE, 0, 0)
+											cmp00.SizeChanged()
+										}},
 									Label{
 										AssignTo: &lbl1,
 										Text:     "Folders",
@@ -600,68 +721,131 @@ func main() {
 									HSpacer{},
 								},
 							},
-							HSplitter{
-								HandleWidth: 6,
-								Name:        "treetableSplitter",
-								AssignTo:    &ts2,
+							Composite{
+								AssignTo: &Mw.compFolder,
+								Name:     "treebasecomp",
+								Layout:   HBox{Margins: Margins{16, 0, 0, 1}},
+								MinSize:  Size{0, 200},
+								MaxSize:  Size{0, 360},
 								Children: []Widget{
 									TreeView{
+										Name:                 "treecomp",
 										AssignTo:             &treeView,
 										Model:                treeModel,
 										OnCurrentItemChanged: OnTreeCurrentItemChanged,
 										OnMouseDown:          Mw.OnTreeMouseDown,
 										Font:                 myFont,
 									},
-									TableView{
-										AssignTo:              &tableView,
-										AlternatingRowBGColor: walk.RGB(255, 255, 224),
-										CheckBoxes:            true,
-										ColumnsOrderable:      true,
-										MultiSelection:        true,
-										Font:                  myFont,
-										Columns: []TableViewColumn{
-											TableViewColumn{
-												DataMember: "Name",
-												Width:      240,
+								},
+							},
+
+							Composite{
+								AssignTo: &hdr3,
+								Name:     "leftbar-header3",
+								Layout:   HBox{Margins: Margins{4, 0, 4, 0}},
+								MinSize:  Size{0, 24},
+								MaxSize:  Size{0, 24},
+								Children: []Widget{
+									ToolButton{Text: "+",
+										OnMouseUp: func(x, y int, mb walk.MouseButton) {
+											if cmp03.Visible() {
+												hdr3.SetBackground(cmp00.Background())
+												cmp03.SetVisible(false)
+												cmp03.SetHeight(1)
+											} else {
+												hdr3.SetBackground(brs)
+												cmp03.SetVisible(true)
+											}
+											cmp00.SendMessage(win.WM_SIZE, 0, 0)
+											cmp00.SizeChanged()
+										}},
+									Label{
+										AssignTo: &lbl1,
+										Text:     "Create Albums",
+										Font:     myFont,
+									},
+									HSpacer{},
+								},
+							},
+							Composite{
+								AssignTo: &cmp03,
+								Name:     "editorbasecomp",
+								Layout:   Grid{Columns: 1, Margins: Margins{1, 0, 1, 0}, SpacingZero: true},
+								Font:     myFont,
+								OnMouseDown: func(x, y int, mb walk.MouseButton) {
+									cmp03.SetBackground(hdr3.Background())
+								},
+								Children: []Widget{
+									Composite{
+										Layout: Grid{Columns: 2, Margins: Margins{Bottom: 0}},
+										Children: []Widget{
+											Label{
+												Text: "Album name:",
 											},
-											TableViewColumn{
-												DataMember: "Size",
-												Format:     "%d",
-												Alignment:  AlignFar,
-												Width:      64,
+											TextEdit{AssignTo: &albumData1, Font: myFont2},
+											Label{
+												Text:       "Description:",
+												Column:     0,
+												ColumnSpan: 1,
 											},
-											TableViewColumn{
-												DataMember: "Modified",
-												Format:     "2006-01-02 15:04:05",
-												Width:      120,
+											TextEdit{AssignTo: &albumData2, Font: myFont2,
+												MinSize: Size{0, 50},
 											},
-											TableViewColumn{
-												DataMember: "Type",
-												Width:      64,
+										}},
+									Composite{
+										Layout: Grid{Columns: 3, Margins: Margins{4, 0, 8, 4}},
+										Children: []Widget{
+											HSpacer{},
+											PushButton{
+												Text: "Cancel", OnMouseDown: func(x, y int, mb walk.MouseButton) {
+													hdr3.SetBackground(cmp00.Background())
+													cmp03.SetVisible(false)
+													cmp00.SendMessage(win.WM_SIZE, 0, 0)
+													cmp00.SizeChanged()
+
+													Mw.albumCancel()
+												},
 											},
-											TableViewColumn{
-												DataMember: "Width",
-												Alignment:  AlignFar,
-												Format:     "%d",
-												Width:      40,
-											},
-											TableViewColumn{
-												DataMember: "Height",
-												Alignment:  AlignFar,
-												Format:     "%d",
-												Width:      40,
+											PushButton{
+												Text: "Save",
+												OnClicked: func() {
+													hdr3.SetBackground(cmp00.Background())
+													cmp03.SetVisible(false)
+													cmp00.SendMessage(win.WM_SIZE, 0, 0)
+													cmp00.SizeChanged()
+
+													Mw.albumSaveEdit()
+												},
 											},
 										},
-										Model: tableModel,
-										OnCurrentIndexChanged:    Mw.OnTableCurrentIndexChanged,
-										OnSelectedIndexesChanged: Mw.OnTableSelectedIndexesChanged,
 									},
 								},
 							},
 							Composite{
-								AssignTo: &cmp2,
-								Layout:   VBox{},
+								AssignTo: &hdr2,
+								Name:     "leftbar-header2",
+								Layout:   HBox{Margins: Margins{4, 0, 4, 0}},
+								MinSize:  Size{0, 24},
+								MaxSize:  Size{0, 24},
+								Children: []Widget{
+									ToolButton{Text: "+",
+										OnMouseUp: func(x, y int, mb walk.MouseButton) {
+											Mw.albumShow(!Mw.compAlbum.Visible())
+										}},
+									Label{
+										Text: "Albums",
+										Font: myFont,
+									},
+									HSpacer{},
+								},
 							},
+							Composite{
+								AssignTo: &Mw.compAlbum,
+								Name:     "albumbasecomp",
+								Layout:   HBox{Margins: Margins{16, 0, 0, 0}},
+								//MinSize:  Size{0, 250},
+							},
+							VSpacer{},
 						},
 					},
 					Composite{
@@ -679,14 +863,11 @@ func main() {
 
 	Mw.Closing().Attach(Mw.onAppClose)
 
-	Mw.hSplitter.SetFixed(ts1, true)
+	Mw.hSplitter.SetFixed(cmp00, true)
 
-	brs, _ := walk.NewSolidColorBrush(walk.RGB(195, 200, 205))
-	cmp1.SetBackground(brs)
-
-	brs, _ = walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
-	lbl1.SetBackground(brs)
-	cmp2.SetBackground(brs)
+	hdr1.SetBackground(brs)
+	//	cmp02.SetVisible(false)
+	//	cmp03.SetVisible(false)
 
 	sbr := Mw.StatusBar()
 	sbr.SetVisible(true)
@@ -709,7 +890,7 @@ func main() {
 	//-----------
 	//Thumbviewer
 	//-----------
-	Mw.thumbView, _ = NewScrollViewer(Mw.MainWindow, Mw.viewBase, nil, 0, 0, 0)
+	Mw.thumbView, _ = NewScrollViewer(Mw.MainWindow, Mw.viewBase, true, 0, 0, 0)
 
 	Mw.thumbView.SetImageProcessorStatusFunc(Mw.imageProcessStatusHandler)
 	Mw.thumbView.SetImageProcessorInfoFunc(Mw.imageProcessInfoHandler)
@@ -732,6 +913,9 @@ func main() {
 
 	//context menus
 	menu, _ := walk.NewMenu()
+	addMenuActions(menu, "&Add to Album", Mw.onMenuActionAlbumAdd, false, false, false)
+	addMenuActions(menu, "&Remove from Album", Mw.onMenuActionAlbumDel, false, false, false)
+	addMenuActions(menu, "", nil, true, false, false)
 	addMenuActions(menu, "&Preview", Mw.onMenuActionPreview, false, false, false)
 	addMenuActions(menu, "&Quickview", Mw.onMenuActionPreview2, false, false, false)
 	addMenuActions(menu, "", nil, true, false, false)
@@ -755,6 +939,21 @@ func main() {
 	addMenuActions(menu, "&Reload", Mw.onMenuActionReload, false, false, false)
 
 	Mw.treeMenu = menu
+
+	cmp03.SetVisible(false)
+	Mw.compAlbum.SetVisible(false)
+
+	if s, ok := settings.Get("LeftBar-Folders"); ok {
+		b, _ := strconv.ParseBool(s)
+		Mw.compFolder.SetVisible(b)
+	}
+	if s, ok := settings.Get("LeftBar-Albums"); ok {
+		b, _ := strconv.ParseBool(s)
+
+		if b {
+			Mw.albumShow(true)
+		}
+	}
 
 	if s, ok := settings.Get("Cached"); ok {
 		b, _ := strconv.ParseBool(s)
@@ -794,7 +993,7 @@ func main() {
 		LocatePath(s)
 	}
 
-	tableView.ColumnClicked().Attach(Mw.onTableColClick)
+	//tableView.ColumnClicked().Attach(Mw.onTableColClick)
 
 	//experimental net server
 	go StartNet()
@@ -805,6 +1004,9 @@ func main() {
 	Mw.MainWindow.Run()
 
 	//on exit, save settings
+	settings.Put("LeftBar-Folders", strconv.FormatBool(Mw.visibleFolder))
+	settings.Put("LeftBar-Albums", strconv.FormatBool(Mw.visibleAlbum))
+
 	settings.Put("LastAddress", tableModel.dirPath)
 	settings.Put("ThumbW", strconv.Itoa(Mw.thumbView.itemSize.tw))
 	settings.Put("ThumbH", strconv.Itoa(Mw.thumbView.itemSize.th))

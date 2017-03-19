@@ -69,9 +69,13 @@ func (ip *ImageProcessor) Close(sv *ScrollViewer) bool {
 
 	return true
 }
-func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath string) bool {
+func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirPaths []string) bool {
 	runtime.GC()
 	sv.handleChangedItems = false
+
+	if ip == nil {
+		return false
+	}
 
 	if ip.workmap == nil {
 		ip.workmap = make(WorkMap)
@@ -87,7 +91,11 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 
 	//add work items to workmap
 	for _, v := range jobList {
-		ip.workmap[filepath.Join(dirpath, v.Name)] = &workitem{path: dirpath}
+		if v.Info == "" {
+			ip.workmap[filepath.Join(dirPaths[0], v.Name)] = &workitem{path: "x"} //dirpath
+		} else {
+			ip.workmap[filepath.Join(v.Info, v.Name)] = &workitem{path: "x"}
+		}
 	}
 
 	//determine the num of worker goroutines
@@ -122,9 +130,9 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 		}
 
 		//Load data from cache
-		n := sv.CacheDBEnum(dirpath)
+		n := sv.CacheDBEnum(dirPaths)
 
-		log.Println("CacheDBEnum found", n, "in", dirpath)
+		log.Println("CacheDBEnum found", n, "in", dirPaths)
 
 		if ip.statuswidget != nil {
 			ip.workStatus = NewProgresDrawer(ip.statuswidget.AsWidgetBase(), 240, numJob)
@@ -167,21 +175,20 @@ func (ip *ImageProcessor) Run(sv *ScrollViewer, jobList []*FileInfo, dirpath str
 
 			sv.recalc()
 		}
-		sv.canvasView.Synchronize(func() {
-			sv.canvasView.Invalidate()
-		})
 
 		//wait for all workers to finish
 		ip.workerWaiter.Wait()
-
-		//log.Println("ImageProcessor Run finished", itms, sv.ItemsMap)
 
 		if ip.workStatus != nil {
 			ip.workStatus.Clear()
 		}
 
 		//update db for items in this path only
-		cntupd, _ := sv.CacheDBUpdateMapItems(sv.ItemsMap, dirpath)
+		cntupd, _ := sv.CacheDBUpdateMapItems(sv.ItemsMap, dirPaths)
+
+		sv.canvasView.Synchronize(func() {
+			sv.canvasView.Invalidate()
+		})
 
 		sv.handleChangedItems = true
 
@@ -321,7 +328,7 @@ func (im *ContentMonitor) processChangedItem(sv *ScrollViewer, repaint bool) {
 				im.imageprocessor.workerWaiter.Wait()
 			}
 			if len(workitmlist) > 0 {
-				n, _ := sv.CacheDBUpdateMapItems(im.doneMap, "")
+				n, _ := sv.CacheDBUpdateMapItems(im.doneMap, []string{""})
 
 				im.itmMutex.Lock()
 				im.removeChangedItems(im.changeMap)

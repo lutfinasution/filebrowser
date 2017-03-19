@@ -260,6 +260,7 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 	//open
 	file, err := os.Open(mkey)
 	if err != nil {
+		log.Println(err.Error())
 		return nil
 	}
 	defer file.Close()
@@ -297,7 +298,9 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 
 		img, err = jpeg.DecodeIntoRGBA(file, &jopt)
 		if err != nil {
-			log.Fatal(err)
+			//log.Fatal(err)
+			log.Println(err.Error())
+			return nil
 		}
 	case ".png":
 		img, err = png.Decode(file)
@@ -461,7 +464,7 @@ func GetImageInfo(name string) (walk.Size, error) {
 
 	file, err := os.Open(name)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err.Error())
 		return w, err
 	}
 	defer file.Close()
@@ -951,7 +954,235 @@ func (ds *drawstats) add(num float64) {
 
 var drawStat drawstats
 
-func drawfuncNB(sv *ScrollViewer, data *FileInfo) {
+type DrawerFunc func(sv *ScrollViewer, data *FileInfo)
+
+func drawStartWorkers(sv *ScrollViewer, drawFunc DrawerFunc) {
+	// drawing w/ goroutines
+	if sv.drawersChan == nil {
+		sv.drawersChan = make(chan *FileInfo)
+	}
+	if !sv.drawersActive {
+		sv.drawersActive = true
+		sv.drawerFunc = drawFunc
+		sv.drawersCount = 4
+
+		for g := 0; g < sv.drawersCount; g++ {
+			//---------------------------------------------------
+			go func(datachan chan *FileInfo) {
+				for v := range datachan {
+					if v != nil {
+						sv.drawerFunc(sv, v)
+						sv.drawersWait.Done()
+					} else {
+						sv.drawersWait.Done()
+						log.Println("screen drawer goroutine, exiting...bye")
+						break
+					}
+				}
+			}(sv.drawersChan)
+			//---------------------------------------------------
+		}
+	} else {
+		if fmt.Sprint(sv.drawerFunc) != fmt.Sprint(drawFunc) {
+			log.Println("Different drawerfunc is in use. Switching draw func to new drawFunc")
+			sv.drawerFunc = drawFunc
+		}
+	}
+}
+
+func drawContinuosFunc(sv *ScrollViewer, data *FileInfo) {
+
+	ws, hs := sv.itemSize.tw, sv.itemSize.th
+	img := image.NewRGBA(image.Rect(0, 0, data.drawRect.Width, hs))
+	wd, hd := getOptimalThumbSize(ws, hs, data.Width, data.Height)
+
+	mkey := filepath.Join(sv.itemsModel.dirPath, data.Name)
+
+	_, err := renderImageBuffer(sv, mkey, data, img, 0, hs-hd, false, false, false)
+	if err != nil {
+		log.Println("error decoding : ", mkey, len(data.Imagedata), wd)
+	}
+
+	if data.checked {
+		renderBorder(sv, img, 0, 0, wd, hs)
+	}
+
+	//Draw to sv.drawerHDC
+	//	drawImageRGBAToCanvas(sv, img, sv.drawerHDC, data.drawRect.X, data.drawRect.Y,
+	//		data.drawRect.Width, data.drawRect.Height)
+
+	// this is the fastest draw method, manipulating the pixels of
+	// the draw buffer's dibsection directly.
+	// faster by > 50% compared to drawImageRGBAToCanvas above
+	drawImageRGBAToDIB(sv, img, sv.drawerBuffer, data.drawRect.X, data.drawRect.Y, data.drawRect.Width, data.drawRect.Height)
+}
+
+// This draw function is for thumbview rendering.
+// Rendering in FRAMELESS layout w/ 4 concurrent drawers, using drawbuffer.
+func drawContinuos(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
+
+	//cleaner := func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
+	cleaner := func(hdc win.HDC, area walk.Rectangle, offsetX int, offsetY int) {
+		//		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+
+		//		if offsetX != 0 {
+		//			area.X = offsetX
+		//		}
+		//		if offsetY != 0 {
+		//			area.Y -= offsetY
+		//		}
+		//		cvs.FillRectangle(brush, area)
+
+		//		defer brush.Dispose()
+		win.BitBlt(hdc, int32(area.X), int32(area.Y), int32(area.Width), int32(area.Height),
+			hdc, 0, 0, win.BLACKNESS)
+	}
+
+	t := time.Now()
+	numItems := sv.itemsCount
+
+	if sv.drawerBuffer == nil {
+		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
+		sv.drawerHDC = sv.drawerBuffer.drawHDC
+		sv.drawerBuffer.count = numItems
+	}
+	if sv.drawerBuffer.size.Width != sv.ViewWidth() || sv.drawerBuffer.size.Height != sv.ViewHeight() {
+		DeleteDrawBuffer(sv.drawerBuffer)
+
+		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
+		sv.drawerHDC = sv.drawerBuffer.drawHDC
+		sv.drawerBuffer.count = numItems
+	}
+
+	if sv.drawerBuffer.count != numItems {
+		cleaner(sv.drawerHDC, viewbounds, 0, 0)
+		sv.drawerBuffer.count = numItems
+	}
+
+	//default drawing ops, clearing the canvas, when no content is available
+	if sv.itemsCount == 0 || sv.ItemsMap == nil {
+		cleaner(sv.drawerHDC, viewbounds, 0, 0)
+		win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerHDC, 0, 0, win.SRCCOPY)
+		return nil
+	}
+
+	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
+
+	w := sv.itemSize.tw
+	h := sv.itemSize.th
+	//-------------------------------------
+	//Begin Screen adjustments
+	//-------------------------------------
+	iscrollSize := sv.viewInfo.lastPos - sv.viewInfo.topPos
+	if abs(iscrollSize) > 2*h {
+		iscrollSize = 2 * h * iscrollSize / abs(iscrollSize)
+	}
+	//shift offscreen image according to scroll direction
+	if iscrollSize != 0 {
+		win.BitBlt(sv.drawerHDC,
+			0, int32(iscrollSize), int32(sv.ViewWidth()), int32(sv.ViewHeight()-iscrollSize),
+			sv.drawerHDC, 0, 0, win.SRCCOPY)
+
+	}
+	sv.viewInfo.lastPos = sv.viewInfo.topPos
+	//-------------------------------------
+	//End Screen adjustments
+	//-------------------------------------
+
+	icount := 0
+	x := 0
+	y := 0
+	wmax := sv.ViewWidth()
+
+	workmap := make(ItmMap, numItems)
+
+	for i, val := range sv.itemsModel.items {
+
+		wd, hd := getOptimalThumbSize(w, h, val.Width, val.Height)
+		if wd+hd == 0 {
+			continue
+		}
+		if x+wd > wmax { //check if next image will fit, > means wont fit
+			if wmax-x > 6*wd/10 { //check again, if at least 3/4 will fit
+				wd = wmax - x
+			} else {
+				x = 0
+				y += h
+			}
+		}
+		rItm := image.Rect(x, y, x+wd, y+h)
+		//---------------------------------------------------------
+		//Only record items within the Update rect
+		//---------------------------------------------------------
+		if rUpdate.Intersect(rItm) != image.ZR {
+			icount++
+
+			w0 := wd
+			wnxt := 0
+			//if i+1 < numItems {
+			if i+1 < len(sv.itemsModel.items) {
+				valx := sv.itemsModel.items[i+1]
+				wnxt, _ = getOptimalThumbSize(w, h, valx.Width, valx.Height)
+			}
+
+			if wmax-(x+wd) <= 6*wnxt/10 || i == numItems-1 {
+				wd = wmax - x
+			}
+			mkey := sv.itemsModel.getFullPath(i)
+
+			//record n store the calculated screen coordinates
+			//to workmap
+			val.drawRect = walk.Rectangle{x, y - sv.viewInfo.topPos, wd, h}
+			workmap[mkey] = val
+			wd = w0
+		}
+		x += wd
+	}
+
+	// Start drawer workers if not already running
+	drawStartWorkers(sv, drawContinuosFunc)
+
+	getNextItem := func() (res *FileInfo) {
+		res = nil
+		for k, v := range workmap {
+			res = v
+			delete(workmap, k)
+			break
+		}
+		return res
+	}
+	// setup sync waiter to the number of items to process
+	sv.drawersWait.Add(len(workmap))
+
+	// launch the driver loop to send data to the previously launched goroutines.
+	for {
+		v := getNextItem()
+
+		if v != nil {
+			sv.drawersChan <- v
+		} else {
+			break
+		}
+	}
+	//wait for all workitems to be processed
+	sv.drawersWait.Wait()
+
+	//-----------------------------
+	// draw entire buffer to screen
+	//-----------------------------
+	win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerHDC, 0, 0, win.SRCCOPY)
+
+	d := time.Since(t).Seconds()
+	drawStat.add(d)
+	//log.Println("RedrawScreen rendering ", icount, "items in ", fmt.Sprintf("%6.3f", d), fmt.Sprintf("%6.3f", drawStat.avg()))
+
+	if sv.handleChangedItems {
+		defer sv.contentMonitor.processChangedItem(sv, false)
+	}
+	return nil
+}
+
+func drawGridFunc(sv *ScrollViewer, data *FileInfo) {
 
 	imgBase := image.NewRGBA(image.Rect(0, 0, data.drawRect.Width, data.drawRect.Height))
 
@@ -986,10 +1217,14 @@ func drawfuncNB(sv *ScrollViewer, data *FileInfo) {
 
 	cvs.Dispose()
 }
-func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
+
+// This draw function is for thumbview rendering.
+// Rendering in GRID layout w/ 4 concurrent drawers, direct to canvas
+func drawGrid(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
 	var cleaner = func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
 		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+		defer brush.Dispose()
 
 		if offsetX != 0 {
 			area.X = offsetX
@@ -998,8 +1233,6 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 			area.Y -= offsetY
 		}
 		cvs.FillRectangle(brush, area)
-
-		defer brush.Dispose()
 	}
 
 	//default drawing ops, clearing the canvas, when no content is available
@@ -1031,7 +1264,6 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 	//-------------------------------------
 	//End Screen adjustments
 	//-------------------------------------
-	//icount := 0
 	numcols := int(math.Trunc(float64(viewbounds.Width) / float64(w)))
 
 	if numcols == 0 {
@@ -1051,49 +1283,18 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 		//Only perform drawing ops on items within the Update rect
 		//---------------------------------------------------------
 		if rUpdate.Intersect(rItm) != image.ZR {
-			//icount++
 			mkey := sv.itemsModel.getFullPath(i)
 
 			if v, ok := sv.ItemsMap[mkey]; ok {
-				//record n store the calculated screen coordinates
-				//to workmap
+				// record n store the calculated screen coordinates to workmap
 				v.drawRect = walk.Rectangle{x, y - sv.viewInfo.topPos, w, h}
 				workmap[mkey] = v
 			}
 		}
 	}
 
-	// drawing w/ goroutines
-	if sv.drawersChan == nil {
-		sv.drawersChan = make(chan *FileInfo)
-	}
-	if !sv.drawersActive {
-		sv.drawersActive = true
-		sv.drawerFunc = drawfuncNB
-		sv.drawersCount = 4
-
-		for g := 0; g < sv.drawersCount; g++ {
-			//---------------------------------------------------
-			go func(datachan chan *FileInfo) {
-				for v := range datachan {
-					if v != nil {
-						sv.drawerFunc(sv, v)
-						sv.drawersWait.Done()
-					} else {
-						sv.drawersWait.Done()
-						log.Println("screen drawer goroutine, exiting...bye")
-						break
-					}
-				}
-			}(sv.drawersChan)
-			//---------------------------------------------------
-		}
-	} else {
-		if fmt.Sprint(sv.drawerFunc) != fmt.Sprint(drawfuncNB) {
-			log.Println("Different drawerfunc is in use. Switching draw func to drawfuncNB")
-			sv.drawerFunc = drawfuncNB
-		}
-	}
+	// Start drawer workers if not already running
+	drawStartWorkers(sv, drawGridFunc)
 
 	getNextItem := func() (res *FileInfo) {
 		for k, v := range workmap {
@@ -1110,14 +1311,13 @@ func RedrawScreenNB(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rec
 
 	//launch the driver loop to send data
 	//to the previously launched goroutines.
-loop:
 	for {
 		v := getNextItem()
 
 		if v != nil {
 			sv.drawersChan <- v
 		} else {
-			break loop
+			break
 		}
 	}
 	//wait for all workitem to be processed
@@ -1151,7 +1351,7 @@ loop:
 	return nil
 }
 
-func drawfuncNB3(sv *ScrollViewer, data *FileInfo) {
+func drawInfocardFunc(sv *ScrollViewer, data *FileInfo) {
 
 	imgBase := image.NewRGBA(image.Rect(0, 0, data.drawRect.Width, data.drawRect.Height))
 
@@ -1186,7 +1386,10 @@ func drawfuncNB3(sv *ScrollViewer, data *FileInfo) {
 
 	cvs.Dispose()
 }
-func RedrawScreenNB3(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
+
+// This draw function is for thumbview rendering.
+// Rendering in INFOCARD layout w/ 4 concurrent drawers, direct to canvas
+func drawInfocard(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
 	var cleaner = func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
 		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
@@ -1264,37 +1467,8 @@ func RedrawScreenNB3(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 		}
 	}
 
-	// drawing w/ goroutines
-	if sv.drawersChan == nil {
-		sv.drawersChan = make(chan *FileInfo)
-	}
-	if !sv.drawersActive {
-		sv.drawersActive = true
-		sv.drawerFunc = drawfuncNB3
-		sv.drawersCount = 4
-
-		for g := 0; g < sv.drawersCount; g++ {
-			//---------------------------------------------------
-			go func(datachan chan *FileInfo) {
-				for v := range datachan {
-					if v != nil {
-						sv.drawerFunc(sv, v)
-						sv.drawersWait.Done()
-					} else {
-						sv.drawersWait.Done()
-						log.Println("screen drawer goroutine, exiting...bye")
-						break
-					}
-				}
-			}(sv.drawersChan)
-			//---------------------------------------------------
-		}
-	} else {
-		if fmt.Sprint(sv.drawerFunc) != fmt.Sprint(drawfuncNB3) {
-			log.Println("Different drawerfunc is in use. Switching draw func to drawfuncNB3")
-			sv.drawerFunc = drawfuncNB3
-		}
-	}
+	// Start drawer workers if not already running
+	drawStartWorkers(sv, drawInfocardFunc)
 
 	getNextItem := func() (res *FileInfo) {
 		for k, v := range workmap {
@@ -1311,20 +1485,18 @@ func RedrawScreenNB3(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Re
 
 	//launch the driver loop to send data
 	//to the previously launched goroutines.
-loop:
 	for {
 		v := getNextItem()
 
 		if v != nil {
 			sv.drawersChan <- v
 		} else {
-			break loop
+			break
 		}
 	}
 	//wait for all workitem to be processed
 	sv.drawersWait.Wait()
 
-	b := sv.canvasView.ClientBounds()
 	//cleanup code
 	//right side
 	numitem := sv.itemsCount
@@ -1333,257 +1505,163 @@ loop:
 	} else {
 		x = w * numcols
 	}
+	b := sv.canvasView.ClientBounds()
 	if x < b.Right() {
 		rClear := walk.Rectangle{x, 0, b.Right() - x, b.Bottom()}
 		cleaner(canvas, rClear, 0, 0)
 	}
-	//bottom side
+	// bottom side
 	numrows := int(math.Ceil(float64(numitem) / float64(numcols)))
 	lastY := (numrows)*h - sv.viewInfo.topPos
 	if lastY < b.Bottom() {
 		rClear := walk.Rectangle{0, lastY, b.Right(), b.Bottom() - lastY}
 		cleaner(canvas, rClear, 0, 0)
-
-		//log.Println("RedrawScreen", lastY, b.Bottom(), sv.itemHeight, numrows)
 	}
-	//end of items side
+	// end of items side
 	lastX := w * (numitem % numcols)
 	if lastX < b.Right() {
 		rClear := walk.Rectangle{lastX, lastY, b.Right(), b.Bottom() - lastY}
 		cleaner(canvas, rClear, 0, 0)
-
-		//log.Println("RedrawScreen", lastY, b.Bottom(), sv.itemHeight, numrows)
 	}
 
 	d := time.Since(t).Seconds()
 	drawStat.add(d)
-	//log.Println("RedrawScreen rendering: ", icount, "items in ", fmt.Sprintf("%6.3f", d), fmt.Sprintf("%6.3f", drawStat.avg()))
 
-	if sv.handleChangedItems {
+	if sv.handleChangedItems && sv.contentMonitor != nil {
 		defer sv.contentMonitor.processChangedItem(sv, false)
 	}
 	return nil
 }
 
-func drawfuncNB2(sv *ScrollViewer, data *FileInfo) {
+func drawInfocardAlbumFunc(sv *ScrollViewer, data *FileInfo) {
 
-	ws, hs := sv.itemSize.tw, sv.itemSize.th
-	img := image.NewRGBA(image.Rect(0, 0, data.drawRect.Width, hs))
-	wd, hd := getOptimalThumbSize(ws, hs, data.Width, data.Height)
+	imgBase := image.NewRGBA(image.Rect(0, 0, data.drawRect.Width, data.drawRect.Height))
 
 	mkey := filepath.Join(sv.itemsModel.dirPath, data.Name)
 
-	_, err := renderImageBuffer(sv, mkey, data, img, 0, hs-hd, false, false, false)
+	_, err := renderImageBuffer(sv, mkey, data, imgBase, 0, 0, data.checked, true, true)
 	if err != nil {
-		log.Println("error decoding : ", mkey, len(data.Imagedata), wd)
+		log.Println("error decoding : ", mkey, len(data.Imagedata))
 	}
 
-	if data.checked {
-		renderBorder(sv, img, 0, 0, wd, hs)
-	}
+	var textout []string
 
-	//Draw to sv.drawerHDC
-	//	drawImageRGBAToCanvas(sv, img, sv.drawerHDC, data.drawRect.X, data.drawRect.Y,
-	//		data.drawRect.Width, data.drawRect.Height)
+	textout = append(textout, data.Name)
+	textout = append(textout, data.Info)
+	textout = append(textout, data.Modified.Format("Jan 2, 2006 3:04pm"))
+	textout = append(textout, fmt.Sprintf("%d items", data.Size))
 
-	// this is the fastest draw method, manipulating the pixels of
-	// the draw buffer's dibsection directly.
-	// faster by > 50% compared to drawImageRGBAToCanvas above
-	drawImageRGBAToDIB(sv, img, sv.drawerBuffer, data.drawRect.X, data.drawRect.Y, data.drawRect.Width, data.drawRect.Height)
+	drawtext(sv, textout, imgBase, imgBase.Bounds(), walk.TextRight, walk.AlignHNearVCenter)
+
+	//Draw to screen
+	cvs, _ := sv.canvasView.CreateCanvas()
+
+	drawImageRGBAToCanvas(sv, imgBase, cvs.HDC(), data.drawRect.X, data.drawRect.Y,
+		data.drawRect.Width, data.drawRect.Height)
+
+	cvs.Dispose()
 }
 
-func RedrawScreenNB2(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
+// This draw function is for album rendering only.
+// Rendering in INFOCARD layout w/ NO concurrent drawers, direct to canvas
+func drawInfocardAlbum(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
-	//cleaner := func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
-	cleaner := func(hdc win.HDC, area walk.Rectangle, offsetX int, offsetY int) {
-		//		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+	var cleaner = func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
+		brush, _ := walk.NewSolidColorBrush(walk.RGB(20, 20, 20))
+		defer brush.Dispose()
 
-		//		if offsetX != 0 {
-		//			area.X = offsetX
-		//		}
-		//		if offsetY != 0 {
-		//			area.Y -= offsetY
-		//		}
-		//		cvs.FillRectangle(brush, area)
-
-		//		defer brush.Dispose()
-		win.BitBlt(hdc, int32(area.X), int32(area.Y), int32(area.Width), int32(area.Height),
-			hdc, 0, 0, win.BLACKNESS)
-	}
-
-	t := time.Now()
-	numItems := sv.itemsCount
-
-	if sv.drawerBuffer == nil {
-		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
-		sv.drawerHDC = sv.drawerBuffer.drawHDC
-		sv.drawerBuffer.count = numItems
-	}
-	if sv.drawerBuffer.size.Width != sv.ViewWidth() || sv.drawerBuffer.size.Height != sv.ViewHeight() {
-		DeleteDrawBuffer(sv.drawerBuffer)
-
-		sv.drawerBuffer = NewDrawBuffer(sv.ViewWidth(), sv.ViewHeight())
-		sv.drawerHDC = sv.drawerBuffer.drawHDC
-		sv.drawerBuffer.count = numItems
-	}
-
-	if sv.drawerBuffer.count != numItems {
-		cleaner(sv.drawerHDC, viewbounds, 0, 0)
-		sv.drawerBuffer.count = numItems
+		if offsetX != 0 {
+			area.X = offsetX
+		}
+		if offsetY != 0 {
+			area.Y -= offsetY
+		}
+		cvs.FillRectangle(brush, area)
 	}
 
 	//default drawing ops, clearing the canvas, when no content is available
 	if sv.itemsCount == 0 || sv.ItemsMap == nil {
-		cleaner(sv.drawerHDC, viewbounds, 0, 0)
-
-		win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerHDC, 0, 0, win.SRCCOPY)
+		cleaner(canvas, viewbounds, 0, 0)
 		return nil
 	}
 
+	t := time.Now()
+
 	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
 
-	w := sv.itemSize.tw
-	h := sv.itemSize.th
+	w := sv.itemSize.twm() + 150
+	h := sv.itemSize.thm()
 	//-------------------------------------
 	//Begin Screen adjustments
 	//-------------------------------------
 	iscrollSize := sv.viewInfo.lastPos - sv.viewInfo.topPos
-	if abs(iscrollSize) > 2*h {
-		iscrollSize = 2 * h * iscrollSize / abs(iscrollSize)
+	if abs(iscrollSize) > 2*sv.itemHeight {
+		iscrollSize = 2 * sv.itemHeight * iscrollSize / abs(iscrollSize)
 	}
-	//shift offscreen image according to scroll direction
+	//shift onscreen image according to scroll direction
 	if iscrollSize != 0 {
-		win.BitBlt(sv.drawerHDC,
-			0, int32(iscrollSize), int32(sv.ViewWidth()), int32(sv.ViewHeight()-iscrollSize),
-			sv.drawerHDC, 0, 0, win.SRCCOPY)
-
+		win.BitBlt(canvas.HDC(),
+			0, int32(iscrollSize), int32(sv.ViewWidth()), int32(sv.ViewHeight()),
+			canvas.HDC(), 0, 0, win.SRCCOPY)
 	}
 	sv.viewInfo.lastPos = sv.viewInfo.topPos
 	//-------------------------------------
 	//End Screen adjustments
 	//-------------------------------------
+	numcols := int(math.Trunc(float64(viewbounds.Width) / float64(w)))
 
-	icount := 0
-	x := 0
-	y := 0
-	wmax := sv.ViewWidth()
+	if numcols == 0 {
+		return nil
+	}
+	//-------------------------------------------
+	// run this loop to record destination rects
+	// according to this draw layout
+	//-------------------------------------------
+	var x, y int
+	for i, vv := range sv.itemsModel.items {
+		x = (i % numcols) * w
+		y = int(i/numcols) * h
 
-	workmap := make(ItmMap, numItems)
-
-	for i, val := range sv.itemsModel.items {
-
-		wd, hd := getOptimalThumbSize(w, h, val.Width, val.Height)
-		if wd+hd == 0 {
-			continue
-		}
-		if x+wd > wmax { //check if next image will fit, > means wont fit
-			if wmax-x > 6*wd/10 { //check again, if at least 3/4 will fit
-				wd = wmax - x
-			} else {
-				x = 0
-				y += h
-			}
-		}
-		rItm := image.Rect(x, y, x+wd, y+h)
+		rItm := image.Rect(x, y+1, x+w, y+h-1)
 		//---------------------------------------------------------
-		//Only record items within the Update rect
+		//Only perform drawing ops on items within the Update rect
 		//---------------------------------------------------------
 		if rUpdate.Intersect(rItm) != image.ZR {
-			icount++
+			vv.drawRect = walk.Rectangle{x, y - sv.viewInfo.topPos, w, h}
 
-			w0 := wd
-			wnxt := 0
-			if i+1 < numItems {
-				valx := sv.itemsModel.items[i+1]
-				wnxt, _ = getOptimalThumbSize(w, h, valx.Width, valx.Height)
-			}
-
-			if wmax-(x+wd) <= 6*wnxt/10 || i == numItems-1 {
-				wd = wmax - x
-			}
-			mkey := sv.itemsModel.getFullPath(i)
-
-			//record n store the calculated screen coordinates
-			//to workmap
-			val.drawRect = walk.Rectangle{x, y - sv.viewInfo.topPos, wd, h}
-			workmap[mkey] = val
-			wd = w0
+			drawInfocardAlbumFunc(sv, vv)
 		}
-		x += wd
 	}
 
-	//experimental drawing w/ goroutines
-	if sv.drawersChan == nil {
-		sv.drawersChan = make(chan *FileInfo)
-	}
-	if !sv.drawersActive {
-		sv.drawersActive = true
-		sv.drawersCount = 4
-		sv.drawerFunc = drawfuncNB2
-
-		for g := 0; g < sv.drawersCount; g++ {
-			//---------------------------------------------------
-			go func(datachan chan *FileInfo) {
-				for v := range datachan {
-					if v != nil {
-						sv.drawerFunc(sv, v)
-						sv.drawersWait.Done()
-					} else {
-						sv.drawersWait.Done()
-						log.Println("screen drawer goroutine, exiting...bye")
-						break
-					}
-				}
-			}(sv.drawersChan)
-			//---------------------------------------------------
-		}
+	//cleanup code
+	//right side
+	numitem := sv.itemsCount
+	if numitem < numcols {
+		x = w * (numitem % numcols)
 	} else {
-		if fmt.Sprint(sv.drawerFunc) != fmt.Sprint(drawfuncNB2) {
-			sv.drawerFunc = drawfuncNB2
-			log.Println("Different drawerfunc is in use. Switching draw func to drawfuncNB2")
-		}
+		x = w * numcols
 	}
-
-	getNextItem := func() (res *FileInfo) {
-		res = nil
-		for k, v := range workmap {
-			res = v
-			delete(workmap, k)
-			break
-		}
-		return res
+	b := sv.canvasView.ClientBounds()
+	if x < b.Right() {
+		rClear := walk.Rectangle{x, 0, b.Right() - x, b.Bottom()}
+		cleaner(canvas, rClear, 0, 0)
 	}
-	// setup sync waiter to the number of
-	// items to process
-	sv.drawersWait.Add(len(workmap))
-
-	// launch the driver loop to send data
-	// to the previously launched goroutines.
-loop:
-	for {
-		v := getNextItem()
-
-		if v != nil {
-			sv.drawersChan <- v
-		} else {
-			break loop
-		}
+	// bottom side
+	numrows := int(math.Ceil(float64(numitem) / float64(numcols)))
+	lastY := (numrows)*h - sv.viewInfo.topPos
+	if lastY < b.Bottom() {
+		rClear := walk.Rectangle{0, lastY, b.Right(), b.Bottom() - lastY}
+		cleaner(canvas, rClear, 0, 0)
 	}
-	//wait for all workitems to be processed
-	sv.drawersWait.Wait()
-
-	//-----------------------------
-	// draw entire buffer to screen
-	//-----------------------------
-	win.BitBlt(canvas.HDC(), 0, 0, int32(sv.ViewWidth()), int32(sv.ViewHeight()), sv.drawerHDC, 0, 0, win.SRCCOPY)
+	// end of items side
+	lastX := w * (numitem % numcols)
+	if lastX < b.Right() {
+		rClear := walk.Rectangle{lastX, lastY, b.Right(), b.Bottom() - lastY}
+		cleaner(canvas, rClear, 0, 0)
+	}
 
 	d := time.Since(t).Seconds()
 	drawStat.add(d)
-	//log.Println("RedrawScreen rendering ", icount, "items in ", fmt.Sprintf("%6.3f", d), fmt.Sprintf("%6.3f", drawStat.avg()))
-
-	if sv.handleChangedItems {
-		defer sv.contentMonitor.processChangedItem(sv, false)
-	}
 	return nil
 }
 

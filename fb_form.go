@@ -183,7 +183,7 @@ func NewThumbViewWindow(parent *walk.MainWindow, newpath string) int {
 	//-----------
 	//Thumbviewer
 	//-----------
-	tvw.thumbView, _ = NewScrollViewer(tvw.MainWindow, tvw.viewBase, nil, 0, 0, 0)
+	tvw.thumbView, _ = NewScrollViewer(tvw.MainWindow, tvw.viewBase, true, 0, 0, 0)
 
 	tvw.thumbView.SetImageProcessorStatusFunc(tvw.imageProcessStatusHandler)
 	tvw.thumbView.SetImageProcessorInfoFunc(tvw.imageProcessInfoHandler)

@@ -76,7 +76,7 @@ func (mw *ImageViewWindow) onActionKeepLoc() {
 	}
 }
 
-func NewImageViewWindow(parent *walk.MainWindow, imageName string, imglist *FileInfoModel) int {
+func NewImageViewWindow(parent *walk.MainWindow, imageName string, imglist *FileInfoModel, synchfunc func(idx int)) int {
 
 	var tvw = new(ImageViewWindow)
 
@@ -107,6 +107,7 @@ func NewImageViewWindow(parent *walk.MainWindow, imageName string, imglist *File
 
 	// launch imageviewer component
 	tvw.viewerbase, _ = NewImageViewer(tvw.MainWindow, tvw.MainWindow, imageName, imglist)
+	tvw.viewerbase.OnViewImage = synchfunc
 
 	sbr := tvw.StatusBar()
 	sbr.SetVisible(true)
@@ -121,13 +122,6 @@ func NewImageViewWindow(parent *walk.MainWindow, imageName string, imglist *File
 
 	ft, _ := walk.NewFont(tvw.MainWindow.Font().Family(), 10, walk.FontBold)
 	tvw.StatusBar().SetFont(ft)
-
-	//	tvw.btnOptions, _ = walk.NewPushButton(tvw.topComposite)
-	//	tvw.btnOptions.SetText("   ")
-	//	img, _ := walk.NewImageFromFile("./image/menu.png")
-	//	tvw.btnOptions.SetImage(img)
-	//	tvw.btnOptions.SetImageAboveText(true)
-	//tvw.btnOptions.Clicked().Attach(tvw.thumbView.SetOptionMode)
 
 	//context menus
 	menu, _ := walk.NewMenu()
