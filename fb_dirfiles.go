@@ -15,8 +15,10 @@ import (
 )
 
 type FileInfo struct {
-	Name           string
 	index          int
+	indexParent    int
+	Name           string
+	URL            string
 	Size           int64
 	Modified       time.Time
 	Type           string
@@ -27,9 +29,9 @@ type FileInfo struct {
 	Width, Height  int
 	thumbW, thumbH int
 	ModState       string
-	Info           string
-	drawRect       walk.Rectangle
-	Imagedata      []byte
+
+	drawRect  walk.Rectangle
+	Imagedata []byte
 }
 
 func (f FileInfo) HasData() bool {
@@ -51,23 +53,14 @@ func NewFileInfoModel() *FileInfoModel {
 func (f FileInfoModel) getFullPath(idx int) string {
 
 	v := f.items[idx]
-
-	if v.Info == "" {
-		return filepath.Join(f.dirPath, v.Name)
-	} else {
-		return filepath.Join(v.Info, v.Name)
-	}
+	return filepath.Join(v.URL, v.Name)
 }
 
 func (f FileInfoModel) getFullItemPath(item *FileInfo) string {
 
 	for _, v := range f.items {
 		if v == item {
-			if v.Info == "" {
-				return filepath.Join(f.dirPath, v.Name)
-			} else {
-				return filepath.Join(v.Info, v.Name)
-			}
+			return filepath.Join(v.URL, v.Name)
 		}
 	}
 	return ""
@@ -92,13 +85,17 @@ func (m *FileInfoModel) Image(row int) interface{} {
 	return filepath.Join(m.dirPath, m.items[row].Name)
 }
 
-func (m *FileInfoModel) BrowsePath(dirPath string, doHistory bool) error {
+func (m *FileInfoModel) BrowsePath(sv *ScrollViewer, dirPath string, doHistory bool) error {
 	if doHistory {
-		AppSetDirSettings(m.viewer, m.dirPath)
+		AppSetDirSettings(m.viewer, dirPath)
 	}
 
 	m.dirPath = dirPath
 	m.items = nil
+	m.viewer.SetItemsCount(0)
+
+	t := time.Now()
+	doWait := false
 
 	if err := filepath.Walk(dirPath,
 		func(path string, info os.FileInfo, err error) error {
@@ -112,26 +109,35 @@ func (m *FileInfoModel) BrowsePath(dirPath string, doHistory bool) error {
 			if path == dirPath || shouldExclude(name) {
 				return nil
 			}
-			url := filepath.Join(dirPath, name)
+
+			//			url := filepath.Join(dirPath, name)
+			//			imgInfo := walk.Size{0, 0}
 			imgType := filepath.Ext(name)
-			imgInfo := walk.Size{0, 0}
 
 			//Retrieve image dimension, etc based on type
 			switch imgType {
 			case
 				".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp":
-				imgInfo, err = GetImageInfo(url)
+				//				imgInfo, err = GetImageInfo(url)
 
 				item := &FileInfo{
 					Name:     name,
+					URL:      dirPath,
 					Size:     info.Size(),
 					Modified: info.ModTime(),
 					Type:     imgType,
-					Width:    imgInfo.Width,
-					Height:   imgInfo.Height,
-					Changed:  false,
+					//					Width:    imgInfo.Width,
+					//					Height:   imgInfo.Height,
+					Changed: false,
 				}
 				m.items = append(m.items, item)
+
+				//send data through worker channel
+				wItm := workinfo{name: m.getFullItemPath(item), item: item, skipdone: true}
+
+				//sv.imageProcessor.workerWaiter.Add(1)
+				sv.imageProcessor.imageWorkChan[0] <- wItm
+				doWait = true
 			}
 			if info.IsDir() {
 				return filepath.SkipDir
@@ -141,79 +147,84 @@ func (m *FileInfoModel) BrowsePath(dirPath string, doHistory bool) error {
 		}); err != nil {
 		return err
 	}
+	//	if doWait {
+	//		sv.imageProcessor.workerWaiter.Wait()
+	//	}
+
+	log.Println("BrowsePath", dirPath, "in", time.Since(t).Seconds())
 
 	m.PublishRowsReset()
 
 	return nil
 }
 
-func (m *FileInfoModel) SetDirPath(dirPath string, doHistory bool) error {
-	if doHistory {
-		AppSetDirSettings(m.viewer, m.dirPath)
-	}
+//func (m *FileInfoModel) SetDirPath(dirPath string, doHistory bool) error {
+//	if doHistory {
+//		AppSetDirSettings(m.viewer, dirPath)
+//	}
 
-	m.dirPath = dirPath
-	m.items = nil
+//	m.dirPath = dirPath
+//	m.items = nil
 
-	if err := filepath.Walk(dirPath,
-		func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				if info == nil {
-					return filepath.SkipDir
-				}
-			}
-			name := info.Name()
+//	if err := filepath.Walk(dirPath,
+//		func(path string, info os.FileInfo, err error) error {
+//			if err != nil {
+//				if info == nil {
+//					return filepath.SkipDir
+//				}
+//			}
+//			name := info.Name()
 
-			if path == dirPath || shouldExclude(name) {
-				return nil
-			}
-			url := filepath.Join(dirPath, name)
-			imgType := filepath.Ext(name)
-			imgInfo := walk.Size{0, 0}
+//			if path == dirPath || shouldExclude(name) {
+//				return nil
+//			}
+//			url := filepath.Join(dirPath, name)
+//			imgType := filepath.Ext(name)
+//			imgInfo := walk.Size{0, 0}
 
-			//Retrieve image dimension, etc based on type
-			switch imgType {
-			case
-				".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp":
-				imgInfo, err = GetImageInfo(url)
+//			//Retrieve image dimension, etc based on type
+//			switch imgType {
+//			case
+//				".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp":
+//				imgInfo, err = GetImageInfo(url)
 
-				item := &FileInfo{
-					Name:     name,
-					Size:     info.Size(),
-					Modified: info.ModTime(),
-					Type:     imgType,
-					Width:    imgInfo.Width,
-					Height:   imgInfo.Height,
-					Changed:  false,
-				}
-				m.items = append(m.items, item)
-			}
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
+//				item := &FileInfo{
+//					Name:     name,
+//					Size:     info.Size(),
+//					Modified: info.ModTime(),
+//					Type:     imgType,
+//					Width:    imgInfo.Width,
+//					Height:   imgInfo.Height,
+//					Changed:  false,
+//				}
+//				m.items = append(m.items, item)
+//			}
+//			if info.IsDir() {
+//				return filepath.SkipDir
+//			}
 
-			return nil
-		}); err != nil {
-		return err
-	}
+//			return nil
+//		}); err != nil {
+//		return err
+//	}
 
-	m.PublishRowsReset()
+//	m.PublishRowsReset()
 
-	numItems := len(m.items)
-	if numItems > 0 {
-		//create map containing the file infos
-		Mw.thumbView.Run(dirPath, m, true)
-	} else {
-		Mw.thumbView.SetItemsCount(0)
-	}
+//	numItems := len(m.items)
+//	if numItems > 0 {
+//		//create map containing the file infos
+//		Mw.thumbView.Run(dirPath, m, true)
+//	} else {
+//		Mw.thumbView.SetItemsCount(0)
+//	}
 
-	Mw.StatusBar().Invalidate()
-	Mw.MainWindow.SetTitle(dirPath + " (" + strconv.Itoa(numItems) + " files)")
-	Mw.UpdateAddreebar(dirPath)
-	log.Println("Files in path: ", numItems)
+//	Mw.StatusBar().Invalidate()
+//	Mw.MainWindow.SetTitle(dirPath + " (" + strconv.Itoa(numItems) + " files)")
+//	Mw.UpdateAddreebar(dirPath)
+//	log.Println("Files in path: ", numItems)
 
-	return nil
-}
+//	return nil
+//}
 func AppSetDirSettings(sv *ScrollViewer, dirPath string) {
 	settings.Put(dirPath, strconv.Itoa(sv.viewInfo.topPos))
 }
@@ -253,7 +264,7 @@ func (dm *DirectoryMonitor) FSsetNewItem(mkey string) {
 	//Retrieve image dimension, etc based on type
 	switch imgType {
 	case
-		".gif", ".jpg", ".jpeg", ".png", ".webp":
+		".bmp", ".gif", ".jpg", ".jpeg", ".png", ".webp":
 		imgInfo, err = GetImageInfo(mkey)
 
 		//if item already exists,
@@ -271,7 +282,6 @@ func (dm *DirectoryMonitor) FSsetNewItem(mkey string) {
 				Width:    imgInfo.Width,
 				Height:   imgInfo.Height,
 				ModState: "",
-				//Changed:   true,
 			}
 			//adding new item to list
 			dm.viewer.itemsModel.items = append(dm.viewer.itemsModel.items, dm.viewer.ItemsMap[mkey])

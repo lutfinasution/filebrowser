@@ -47,6 +47,7 @@ type ThumbSizes struct {
 	tw, th int
 	mx, my int
 	txth   int
+	extw   int
 }
 
 func (t ThumbSizes) twm() int {
@@ -252,6 +253,7 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 		//and cache=true
 		//and changed=false
 		if createthumb && sv.doCache && v.HasData() && !v.Changed {
+			v.dbsynched = true
 			return nil
 		}
 	}
@@ -283,39 +285,40 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 	//Retrieve image dimension, etc based on type
 	switch imgType := filepath.Ext(mkey); imgType {
 	case ".bmp":
-		img, err = bmp.Decode(file)
-		if err != nil {
-			//log.Fatal(err)
+		if img, err = bmp.Decode(file); err != nil {
+			log.Println("processImageData", err.Error())
 			return nil
 		}
 	case ".gif":
-		img, err = gif.Decode(file)
-		if err != nil {
-			log.Fatal(err)
+		if img, err = gif.Decode(file); err != nil {
+			log.Println("processImageData", err.Error())
+			return nil
 		}
 	case ".jpg", ".jpeg":
 		jopt := jpeg.DecoderOptions{ScaleTarget: image.Rect(0, 0, resW, resH)}
 
-		img, err = jpeg.DecodeIntoRGBA(file, &jopt)
-		if err != nil {
-			//log.Fatal(err)
-			log.Println(err.Error())
+		//if img, err = jpeg.DecodeIntoRGBA(file, &jopt); err != nil {
+		//log.Println("processImageData", err.Error())
+		if img, err = jpeg.Decode(file, &jopt); err != nil {
+			log.Println("processImageData", err.Error())
 			return nil
 		}
+
+		//return nil
+		//}
 	case ".png":
-		img, err = png.Decode(file)
-		if err != nil {
-			//log.Fatal(err)
+		if img, err = png.Decode(file); err != nil {
+			log.Println("processImageData", err.Error())
 			return nil
 		}
 	case ".tif", ".tiff":
-		img, err = tiff.Decode(file)
-		if err != nil {
-			log.Fatal(err)
+		if img, err = tiff.Decode(file); err != nil {
+			log.Println("processImageData", err.Error())
+			return nil
 		}
 	case ".webp":
-		img, err = webp.Decode(file)
-		if err != nil {
+		if img, err = webp.Decode(file); err != nil {
+			log.Println("processImageData", err.Error())
 			return nil
 		}
 	}
@@ -337,6 +340,12 @@ func processImageData(sv *ScrollViewer, mkey string, createthumb bool, imgsize *
 		mt = transform.Resize(img, w, h, transform.NearestNeighbor)
 
 		if v, ok := sv.ItemsMap[mkey]; ok {
+
+			//			if imgSz, ero := GetImageInfo(mkey); ero == nil {
+			//				v.Width = imgSz.Width
+			//				v.Height = imgSz.Height
+			//			}
+
 			//Encode the scaled image & save to cache map
 			jept := jpeg.EncoderOptions{Quality: 75, OptimizeCoding: false, DCTMethod: jpeg.DCTIFast}
 			buf := new(bytes.Buffer)
@@ -477,34 +486,38 @@ func GetImageInfo(name string) (walk.Size, error) {
 	case ".bmp":
 		imgcfg, err = bmp.DecodeConfig(file)
 		if err != nil {
-			//log.Fatal(err)
 			return w, err
 		}
 	case ".gif":
 		imgcfg, err = gif.DecodeConfig(file)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err.Error())
+			return w, err
 		}
 	case ".jpg", ".jpeg":
 		imgcfg, err = jpeg.DecodeConfig(file)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err.Error())
+			return w, err
 		}
+		//log.Println(imgcfg.Width, imgcfg.Height, imgcfg.ColorModel)
+
 	case ".png":
 		imgcfg, err = png.DecodeConfig(file)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err.Error())
+			return w, err
 		}
 	case ".tif", ".tiff":
 		imgcfg, err = tiff.DecodeConfig(file)
 		if err != nil {
-			log.Fatal(err)
+			log.Println(err.Error())
+			return w, err
 		}
 	case ".webp":
 		imgcfg, err = webp.DecodeConfig(file)
 		if err != nil {
-			//log.Fatal(err)
-			log.Println("error decoding : ", err)
+			log.Println(err.Error())
 			return w, err
 		}
 	}
@@ -1164,7 +1177,8 @@ func drawContinuos(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rect
 			break
 		}
 	}
-	//wait for all workitems to be processed
+	// wait for all workitems to be processed
+	// usually it wont be long.
 	sv.drawersWait.Wait()
 
 	//-----------------------------
@@ -1219,7 +1233,7 @@ func drawGridFunc(sv *ScrollViewer, data *FileInfo) {
 }
 
 // This draw function is for thumbview rendering.
-// Rendering in GRID layout w/ 4 concurrent drawers, direct to canvas
+// Rendering in GRID layout w/ 4 concurrent drawers, direct to canva
 func drawGrid(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle, viewbounds walk.Rectangle) error {
 
 	var cleaner = func(cvs *walk.Canvas, area walk.Rectangle, offsetX int, offsetY int) {
@@ -1274,9 +1288,10 @@ func drawGrid(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle
 	// run this loop to record destination rects
 	// according to this draw layout
 	//-------------------------------------------
+	var x, y int
 	for i := range sv.itemsModel.items {
-		x := (i % numcols) * w
-		y := int(i/numcols) * h
+		x = (i % numcols) * w
+		y = int(i/numcols) * h
 
 		rItm := image.Rect(x, y+1, x+w, y+h-1)
 		//---------------------------------------------------------
@@ -1323,21 +1338,33 @@ func drawGrid(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Rectangle
 	//wait for all workitem to be processed
 	sv.drawersWait.Wait()
 
-	b := sv.canvasView.ClientBounds()
 	//cleanup code
-	//right side
-	if w*numcols < b.Right() {
-		rClear := walk.Rectangle{w * numcols, 0, b.Right() - w*numcols, b.Bottom()}
+	//
+	numitem := sv.itemsCount
+	if numitem < numcols {
+		x = w * (numitem % numcols)
+	} else {
+		x = w * numcols
+	}
+	b := sv.canvasView.ClientBounds()
+
+	//right side, at = numcols
+	if x < b.Right() {
+		rClear := walk.Rectangle{x, 0, b.Right() - x, b.Bottom()}
 		cleaner(canvas, rClear, 0, 0)
 	}
+	numrows := int(math.Ceil(float64(numitem) / float64(numcols)))
+	lastY := (numrows)*h - sv.viewInfo.topPos
 
-	//end of items side
-	numitem := sv.itemsCount
-	numodd := numitem % sv.NumCols()
-	if numodd > 0 && sv.viewInfo.topPos >= sv.MaxScrollValue() {
-		rClear := walk.Rectangle{numodd * sv.itemWidth, b.Bottom() - sv.itemHeight,
-			b.Right() - numodd*sv.itemWidth, sv.itemHeight}
-
+	// end of items right side when end < numcols
+	lastX := w * (numitem % numcols)
+	if lastX < b.Right() {
+		rClear := walk.Rectangle{lastX, lastY - h, b.Right(), h}
+		cleaner(canvas, rClear, 0, 0)
+	}
+	// bottom side
+	if lastY < b.Bottom() {
+		rClear := walk.Rectangle{0, lastY, b.Right(), b.Bottom() - lastY}
 		cleaner(canvas, rClear, 0, 0)
 	}
 
@@ -1415,7 +1442,7 @@ func drawInfocard(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Recta
 
 	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
 
-	w := sv.itemSize.twm() + 150
+	w := sv.itemSize.twm() + sv.itemSize.extw
 	h := sv.itemSize.thm()
 	//-------------------------------------
 	//Begin Screen adjustments
@@ -1498,7 +1525,7 @@ func drawInfocard(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Recta
 	sv.drawersWait.Wait()
 
 	//cleanup code
-	//right side
+	//
 	numitem := sv.itemsCount
 	if numitem < numcols {
 		x = w * (numitem % numcols)
@@ -1506,21 +1533,23 @@ func drawInfocard(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.Recta
 		x = w * numcols
 	}
 	b := sv.canvasView.ClientBounds()
+	numrows := int(math.Ceil(float64(numitem) / float64(numcols)))
+	lastY := (numrows)*h - sv.viewInfo.topPos
+
+	//right side
 	if x < b.Right() {
 		rClear := walk.Rectangle{x, 0, b.Right() - x, b.Bottom()}
 		cleaner(canvas, rClear, 0, 0)
 	}
-	// bottom side
-	numrows := int(math.Ceil(float64(numitem) / float64(numcols)))
-	lastY := (numrows)*h - sv.viewInfo.topPos
-	if lastY < b.Bottom() {
-		rClear := walk.Rectangle{0, lastY, b.Right(), b.Bottom() - lastY}
-		cleaner(canvas, rClear, 0, 0)
-	}
-	// end of items side
+	// end of items right side when end < numcols
 	lastX := w * (numitem % numcols)
 	if lastX < b.Right() {
-		rClear := walk.Rectangle{lastX, lastY, b.Right(), b.Bottom() - lastY}
+		rClear := walk.Rectangle{lastX, lastY - h, b.Right(), h}
+		cleaner(canvas, rClear, 0, 0)
+	}
+	// bottom side
+	if lastY < b.Bottom() {
+		rClear := walk.Rectangle{0, lastY, b.Right(), b.Bottom() - lastY}
 		cleaner(canvas, rClear, 0, 0)
 	}
 
@@ -1547,7 +1576,7 @@ func drawInfocardAlbumFunc(sv *ScrollViewer, data *FileInfo) {
 	var textout []string
 
 	textout = append(textout, data.Name)
-	textout = append(textout, data.Info)
+	textout = append(textout, data.URL)
 	textout = append(textout, data.Modified.Format("Jan 2, 2006 3:04pm"))
 	textout = append(textout, fmt.Sprintf("%d items", data.Size))
 
@@ -1589,7 +1618,7 @@ func drawInfocardAlbum(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.
 
 	rUpdate := image.Rect(0, updateBounds.Top(), updateBounds.Width, updateBounds.Bottom())
 
-	w := sv.itemSize.twm() + 150
+	w := sv.itemSize.twm() + sv.itemSize.extw
 	h := sv.itemSize.thm()
 	//-------------------------------------
 	//Begin Screen adjustments
@@ -1611,7 +1640,8 @@ func drawInfocardAlbum(sv *ScrollViewer, canvas *walk.Canvas, updateBounds walk.
 	numcols := int(math.Trunc(float64(viewbounds.Width) / float64(w)))
 
 	if numcols == 0 {
-		return nil
+		//return nil
+		numcols = 1
 	}
 	//-------------------------------------------
 	// run this loop to record destination rects

@@ -14,9 +14,10 @@ import (
 )
 
 type Directory struct {
-	name     string
-	parent   *Directory
-	children DirSlice //[]*Directory
+	name      string
+	parent    *Directory
+	children  DirSlice //[]*Directory
+	donereset bool
 }
 type DirSlice []*Directory
 
@@ -52,8 +53,12 @@ func (d *Directory) Parent() walk.TreeItem {
 	return d.parent
 }
 
+func (d *Directory) ChildAt(index int) walk.TreeItem {
+	return d.children[index]
+}
 func (d *Directory) ChildCount() int {
-	if d.children == nil {
+
+	if !d.donereset && d.children == nil {
 		// It seems this is the first time our child count is checked, so we
 		// use the opportunity to populate our direct children.
 		if err := d.ResetChildren(); err != nil {
@@ -64,18 +69,14 @@ func (d *Directory) ChildCount() int {
 	return len(d.children)
 }
 
-func (d *Directory) ChildAt(index int) walk.TreeItem {
-	return d.children[index]
-}
-
 func (d *Directory) Image() interface{} {
 	return d.Path()
 }
 
 func (d *Directory) ResetChildren() error {
 	d.children = nil
-
 	dirPath := d.Path()
+	d.donereset = true
 
 	if err := filepath.Walk(d.Path(),
 		func(path string, info os.FileInfo, err error) error {
@@ -155,19 +156,9 @@ func (m *DirectoryTreeModel) RootAt(index int) walk.TreeItem {
 	return m.roots[index]
 }
 
-func OnTreeCurrentItemChanged() {
-
-	dir := treeView.CurrentItem().(*Directory)
-
-	if err := tableModel.SetDirPath(dir.Path(), true); err != nil {
-		walk.MsgBox(
-			Mw.MainWindow,
-			"Error",
-			err.Error(),
-			walk.MsgBoxOK|walk.MsgBoxIconError)
-	}
-}
-
+// expands the treeview n locate the treenode
+// corresponding to fpath. Once found, make it
+// the currently selected item.
 func LocatePath(fpath string) bool {
 
 	locateSubDir := func(itms []*Directory, sdir string) (res *Directory) {

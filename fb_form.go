@@ -123,10 +123,10 @@ func (mw *ThumbViewWindow) onDrawPanelMouseDn(x, y int, button walk.MouseButton)
 			bounds := image.Rect(x1, y1+h-mw.thumbView.itemSize.txth, x1+w, y1+h)
 			pt := image.Point{x, y + mw.thumbView.viewInfo.topPos}
 			if pt.In(bounds) {
-				mw.thumbView.suspendPreview = true
+				//mw.thumbView.suspendPreview = true
 				mw.thumbView.SetContextMenu(mw.menuItemAction)
 			} else {
-				mw.thumbView.suspendPreview = false
+				//mw.thumbView.suspendPreview = false
 				mw.thumbView.SetContextMenu(nil)
 			}
 		}
