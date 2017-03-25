@@ -321,38 +321,41 @@ func (im *ContentMonitor) processChangedItem(sv *ScrollViewer, repaint bool) {
 		return
 	}
 	if !im.activated {
-		//copy changeMap to a string slice
+		//copy changeMap to a workinfo slice
 		//important to stability
 		im.activated = true
 
-		var worklist []string
-		for key, _ := range im.changeMap {
-			worklist = append(worklist, key)
+		var worklist []workinfo
+		for key, val := range im.changeMap {
+			worklist = append(worklist, workinfo{name: key, item: val})
 		}
 
-		go func(workitmlist []string) {
+		go func(wl []workinfo) {
 			ires := 0
-			//im.activated = true
+			numItems := len(wl)
 			log.Println("processChangedItem ---------------------------------")
 
-			jobStatus := NewProgresDrawer(im.statuswidget.AsWidgetBase(), 100, len(workitmlist))
+			jobStatus := NewProgresDrawer(im.statuswidget.AsWidgetBase(), 100, numItems)
 
 			if im.imageprocessor.imageWorkChan != nil {
-				im.imageprocessor.workerWaiter.Add(len(workitmlist))
+				im.imageprocessor.workerWaiter.Add(numItems)
 
-				for i, key := range workitmlist {
-					//send data to workers by writing
-					//to the common channel
+				for i, val := range wl {
+					key := val.name
 
 					//key shouldn't already be in doneMap
 					if _, ok := im.doneMap[key]; !ok {
 
+						// send to imageWorkChan to be processed
 						im.imageprocessor.imageWorkChan[0] <- workinfo{name: key}
 
+						// create a new done map item
 						im.itmMutex.Lock()
-						im.doneMap[key] = &FileInfo{Name: key}
+						im.doneMap[key] = val.item
 						im.itmMutex.Unlock()
 
+						// flip dbsynched flag so that
+						// CacheDBUpdateMapItems will process this item
 						v := im.doneMap[key]
 						v.dbsynched = false
 
@@ -364,7 +367,7 @@ func (im *ContentMonitor) processChangedItem(sv *ScrollViewer, repaint bool) {
 				}
 				im.imageprocessor.workerWaiter.Wait()
 			}
-			if len(workitmlist) > 0 {
+			if numItems > 0 {
 				nUpdated, nFailed, _ := sv.CacheDBUpdateMapItems(im.doneMap, []string{""})
 
 				im.itmMutex.Lock()
@@ -379,10 +382,10 @@ func (im *ContentMonitor) processChangedItem(sv *ScrollViewer, repaint bool) {
 						sv.canvasView.Invalidate()
 					})
 				}
+				jobStatus.Clear()
 
 				log.Println("processChangedItem/processImageData: ", ires+1)
 				log.Println("processChangedItem/CacheDBUpdateMapItems, updated: ", nUpdated, "failed:", nFailed)
-				jobStatus.Clear()
 			}
 
 			im.activated = false

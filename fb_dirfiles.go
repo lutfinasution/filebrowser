@@ -276,6 +276,7 @@ func (dm *DirectoryMonitor) FSsetNewItem(mkey string) {
 		} else {
 			dm.viewer.ItemsMap[mkey] = &FileInfo{
 				Name:     name,
+				URL:      filepath.Dir(mkey),
 				Size:     info.Size(),
 				Modified: info.ModTime(),
 				Type:     imgType,

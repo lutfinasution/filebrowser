@@ -182,6 +182,7 @@ func (sv *ScrollViewer) CacheDBEnum(fpaths []string) int {
 	return i
 }
 func (sv *ScrollViewer) CacheDBUpdateMapItems(itmap ItmMap, fpaths []string) (resUpdated int64, reFailed int64, result bool) {
+
 	if !sv.doCache || len(itmap) == 0 {
 		log.Println("CacheDBUpdateMapItems, exit !sv.doCache || len(itmap) == 0")
 		return 0, 0, false
