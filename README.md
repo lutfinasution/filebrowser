@@ -14,7 +14,7 @@ features.
 
 # Features:
   - Image browser, displaying thumbnail of images in a grid.
-  - Image http server, serving thumbnail of images in a folder. Use http://localhost:8080/users/photos while the app is running.
+  - Image http server, serving thumbnail of images in a folder. Use http://localhost:8080/users/albums or http://localhost:8080/users/photos while the app is running.
   - Very fast and efficient multi threaded thumbnail processing with goroutines and channels.
   - Resizeable thumbnail size.
   - Filesystem/directory monitoring for changes (new/delete/renamed/modified files)
